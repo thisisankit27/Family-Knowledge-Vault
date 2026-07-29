@@ -117,4 +117,38 @@ The rest of Checkpoint 1's unresolved findings (medical privacy within family, c
 
 The next real action is **implementing PR-1 (Repo & Environment Init)** from `docs/14-pr-execution-plan.md` §6, whenever the user says "start PR 1." That PR: Expo (TypeScript) scaffold, Supabase project on free tier, env config, basic CI, app icon/splash placeholder — demo is the app booting on a simulator/device with a confirmed live Supabase connection.
 
-Per the git workflow, the two new docs from this session (`docs/14-pr-execution-plan.md`, `CLAUDE.md`) have **not** been committed yet — propose a commit before ending this session if none has happened since they were written.
+`docs/14-pr-execution-plan.md`, `CLAUDE.md`, and this checkpoint update were all committed (3 separate commits, see `git log`).
+
+---
+---
+
+# Pre-PR-1 Readiness Check (2026-07-29)
+
+Before starting PR-1, did an environment/permissions audit and gathered external prerequisites. Findings:
+
+## Environment confirmed
+
+- Node v22.22.1, npm 9.2.0 — compatible with current Expo. `npx expo` works with no global install.
+- Git push auth already cached and working — confirmed via existing history: `origin/master` already has PR #1 (a real `local` → `master` GitHub merge, done via web UI, predates this session's involvement). No branch conflicts.
+- **Linux machine — no iOS Simulator possible (Xcode is Mac-only), no Android SDK/emulator installed.** Primary device-testing plan: **Expo Go on a physical phone** (scan QR from `expo start`), not an emulator.
+
+## Claude Code permissions configured
+
+`.claude/settings.local.json` now allowlists the commands PR-1 and the general day-to-day workflow need: `npm install/ci`, `npx create-expo-app/expo/eas/tsc/eslint/supabase`, `git push/checkout/switch/pull`, `gh pr view` (not `gh pr create` — see PR workflow decision below). Added explicit **deny** rules for `git push --force`, `git reset --hard`, `git clean -f`, `git checkout --`, `git branch -D` as a guardrail consistent with the "never rewrite history" rule.
+
+## PR workflow decision
+
+Asked whether to install/auth `gh` CLI, keep using GitHub's web UI, or skip formal PRs entirely. **User chose: keep using the web UI**, same as PR #1. Recorded in `CLAUDE.md`'s Git Workflow section: each PR day, push the branch and hand the user a ready-to-paste PR title/description (using the template in `docs/12-pr-roadmap.md` §3); don't attempt `gh pr create`.
+
+## External prerequisites — status
+
+1. **Supabase account + project: DONE.** User created a free-tier Supabase project and has the Project URL, Publishable key, and legacy anon/public key saved securely on their end (not in this repo, not pasted in chat — correct handling). These go into a local, gitignored `.env` (with a committed `.env.example` template) as part of PR-1 itself — not before. The `secret`/`service_role`-equivalent key is not needed client-side and should never be pasted anywhere, chat included.
+2. **Expo Go on a physical phone: NOT YET CONFIRMED.** Still needed before PR-1's demo step (app booting + live Supabase connection check) can actually be shown. Confirm before or at the start of PR-1.
+
+## Uncommitted work
+
+One small edit to `CLAUDE.md` (the PR-workflow-via-web-UI line above) is uncommitted as of this checkpoint — propose committing it (either standalone or bundled with PR-1's first commit) next session.
+
+## Next action (updated)
+
+Once Expo Go is confirmed ready on a phone, implement **PR-1** per `docs/14-pr-execution-plan.md` §6.
