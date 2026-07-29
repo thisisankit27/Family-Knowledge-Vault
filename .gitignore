@@ -1,0 +1,15 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# macOS
+.DS_Store
