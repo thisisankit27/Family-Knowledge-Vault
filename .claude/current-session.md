@@ -1,14 +1,14 @@
 # Family Knowledge Vault — Planning Session State
 
-**Last updated:** 2026-07-28 (Checkpoint 1)
+**Last updated:** 2026-07-28 (Checkpoint 2)
 
-**Status:** Documentation review in progress. No code written. No product docs modified yet.
+**Status:** Planning complete for Phase 1. Stack locked in. No application code written yet — next real action is implementing PR-1 whenever the user says "start PR 1."
 
 ---
 
 ## How to use this file
 
-A future Claude session should read this file first, before re-reading `docs/*`, to understand what's already been decided and what's still open. This file is the continuation point — don't re-derive the reasoning below from scratch.
+Read `CLAUDE.md` first, then this file, before re-reading `docs/*` or re-deriving anything. This file is the continuation point — don't re-derive the reasoning below from scratch. Checkpoint 1 (below) is the critical-review history; Checkpoint 2 (further below) is the current state and next action.
 
 ---
 
@@ -80,3 +80,41 @@ In order of leverage:
 4. **Only after the above:** move on to whatever comes after the PR roadmap — i.e., actual implementation starting at PR-001 — per the user's future direction.
 
 **Do not start implementation (code) until the user explicitly asks for it.** This and the prior session's scope was strictly documentation review and planning.
+
+---
+---
+
+# Checkpoint 2 (2026-07-28)
+
+## What happened
+
+The user asked for a self-roadmap before coding starts: a concrete, day-sized PR execution plan, since this project streams live on YouTube (one PR/day, ~2 hour streams, visible progress required every session — no multi-day backend-only stretches). Also asked for a platform decision (leaning mobile) and to update `CLAUDE.md` with full context for future sessions.
+
+Produced and got approval on:
+
+1. **`docs/14-pr-execution-plan.md`** — the new authoritative day-to-day execution guide. Supersedes `docs/12-pr-roadmap.md` for pacing/sizing (that doc remains the historical high-level vision/sequencing).
+2. **`CLAUDE.md`** (project root) — stable conventions: stack, cadence, testing split, git workflow summary, resumability instructions. Read this at the start of every session.
+3. This update to `.claude/current-session.md`.
+
+No application code, no Expo project, no Supabase project exist yet.
+
+## Decisions confirmed this session
+
+1. **Platform: React Native + Expo** (mobile-first, iOS + Android, one codebase). Web-first and "both in parallel" were both considered and rejected (parallel explicitly breaks the 2-hour/day budget).
+2. **Backend: Supabase** (Postgres + Auth + Storage + RLS). **Hard constraint: free tier only to start** — see `docs/14-pr-execution-plan.md` §4 for the specific limits and how later phases (reminders, AI, storage growth) are designed around them.
+3. **Testing split**: backend (services/DB functions/RLS/business logic) = Claude's responsibility, automated, every PR, non-negotiable. UI = shared responsibility (live manual verification during the stream + lightweight component tests where cheap).
+
+## Where things stand vs. Checkpoint 1's open items
+
+Two of Checkpoint 1's unresolved findings now have a concrete home in the roadmap instead of being purely open questions:
+
+- **#3 (no permission matrix)** → will be resolved as a real deliverable in Phase 2, PR-9 "Roles & Permissions" (see `docs/14-pr-execution-plan.md` §7).
+- **#2 (Emergency Mode non-member caregiver access)** → will be resolved in Phase 10, the Emergency Mode PR (§7).
+
+The rest of Checkpoint 1's unresolved findings (medical privacy within family, cross-family sharing, DPDP/compliance gap, NFR realism, data-export FR, Timeline terminology drift, doc-numbering typo, free-tier "one family" tension) are still open and not yet scheduled — revisit opportunistically, most naturally around the PRs that touch them (e.g., medical privacy during Phase 5, cross-family sharing whenever it first blocks a real use case).
+
+## Next action
+
+The next real action is **implementing PR-1 (Repo & Environment Init)** from `docs/14-pr-execution-plan.md` §6, whenever the user says "start PR 1." That PR: Expo (TypeScript) scaffold, Supabase project on free tier, env config, basic CI, app icon/splash placeholder — demo is the app booting on a simulator/device with a confirmed live Supabase connection.
+
+Per the git workflow, the two new docs from this session (`docs/14-pr-execution-plan.md`, `CLAUDE.md`) have **not** been committed yet — propose a commit before ending this session if none has happened since they were written.
