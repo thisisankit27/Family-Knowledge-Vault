@@ -117,4 +117,86 @@ The rest of Checkpoint 1's unresolved findings (medical privacy within family, c
 
 The next real action is **implementing PR-1 (Repo & Environment Init)** from `docs/14-pr-execution-plan.md` §6, whenever the user says "start PR 1." That PR: Expo (TypeScript) scaffold, Supabase project on free tier, env config, basic CI, app icon/splash placeholder — demo is the app booting on a simulator/device with a confirmed live Supabase connection.
 
-Per the git workflow, the two new docs from this session (`docs/14-pr-execution-plan.md`, `CLAUDE.md`) have **not** been committed yet — propose a commit before ending this session if none has happened since they were written.
+`docs/14-pr-execution-plan.md`, `CLAUDE.md`, and this checkpoint update were all committed (3 separate commits, see `git log`).
+
+---
+---
+
+# Pre-PR-1 Readiness Check (2026-07-29)
+
+Before starting PR-1, did an environment/permissions audit and gathered external prerequisites. Findings:
+
+## Environment confirmed
+
+- Node v22.22.1, npm 9.2.0 — compatible with current Expo. `npx expo` works with no global install.
+- Git push auth already cached and working — confirmed via existing history: `origin/master` already has PR #1 (a real `local` → `master` GitHub merge, done via web UI, predates this session's involvement). No branch conflicts.
+- **Linux machine — no iOS Simulator possible (Xcode is Mac-only), no Android SDK/emulator installed.** Primary device-testing plan: **Expo Go on a physical phone** (scan QR from `expo start`), not an emulator.
+
+## Claude Code permissions configured
+
+`.claude/settings.local.json` now allowlists the commands PR-1 and the general day-to-day workflow need: `npm install/ci`, `npx create-expo-app/expo/eas/tsc/eslint/supabase`, `git push/checkout/switch/pull`, `gh pr view` (not `gh pr create` — see PR workflow decision below). Added explicit **deny** rules for `git push --force`, `git reset --hard`, `git clean -f`, `git checkout --`, `git branch -D` as a guardrail consistent with the "never rewrite history" rule.
+
+## PR workflow decision
+
+Asked whether to install/auth `gh` CLI, keep using GitHub's web UI, or skip formal PRs entirely. **User chose: keep using the web UI**, same as PR #1. Recorded in `CLAUDE.md`'s Git Workflow section: each PR day, push the branch and hand the user a ready-to-paste PR title/description (using the template in `docs/12-pr-roadmap.md` §3); don't attempt `gh pr create`.
+
+## External prerequisites — status
+
+1. **Supabase account + project: DONE.** User created a free-tier Supabase project and has the Project URL, Publishable key, and legacy anon/public key saved securely on their end (not in this repo, not pasted in chat — correct handling). These go into a local, gitignored `.env` (with a committed `.env.example` template) as part of PR-1 itself — not before. The `secret`/`service_role`-equivalent key is not needed client-side and should never be pasted anywhere, chat included.
+2. **Expo Go on a physical phone: NOT YET CONFIRMED.** Still needed before PR-1's demo step (app booting + live Supabase connection check) can actually be shown. Confirm before or at the start of PR-1.
+
+## Uncommitted work
+
+One small edit to `CLAUDE.md` (the PR-workflow-via-web-UI line above) is uncommitted as of this checkpoint — propose committing it (either standalone or bundled with PR-1's first commit) next session.
+
+## Next action (updated)
+
+Once Expo Go is confirmed ready on a phone, implement **PR-1** per `docs/14-pr-execution-plan.md` §6.
+
+---
+---
+
+# PR-1 Complete — Repo & Environment Init (2026-07-30)
+
+**Status: built, tested, and demoed live on a physical phone. Supabase connection confirmed working (~100 ms round trip from the device).**
+
+## What shipped
+
+- **Expo TypeScript app** at the repo root (`App.tsx`, `index.ts`, `app.json`, `assets/`), app identity set to "Family Knowledge Vault" with bundle/package id `com.vibethroughcode.familyknowledgevault`.
+- **`src/lib/env.ts`** — resolves and validates Supabase credentials. Prefers the newer publishable key, falls back to the legacy anon key. Lazy + memoised via `getSupabaseEnv()`.
+- **`src/lib/supabase.ts`** — shared client via `getSupabase()`, also lazy. Session persistence deliberately left at default; PR-3 wires it to Expo SecureStore.
+- **`src/services/connection.ts`** — `checkSupabaseConnection()` with injectable deps (url, key, fetchFn, now, timeoutMs) so it is directly unit-testable, plus a production-wired `checkConnection()`.
+- **`src/theme.ts`** — warm-neutral design tokens from `docs/10-ui-ux-design.md`; PR-4 expands this.
+- **`App.tsx`** — connection status screen with loading/success/error states and a "Check again" button.
+- **`.github/workflows/ci.yml`** — typecheck + tests on push/PR.
+- **README** — stack, setup, env-var handling, project structure, and the SDK-pin rationale.
+
+## Test status
+
+14 tests passing across `src/lib/env.test.ts` and `src/services/connection.test.ts`. Typecheck clean.
+
+## Two real bugs caught during the build (worth remembering)
+
+1. **Eager env resolution.** `supabaseEnv` was originally a module-level `const`, so *importing* any consuming module threw wherever `.env` was absent — which would have broken CI on its first run and did break the test suite immediately. Fixed by making resolution lazy and memoised. The lazy pattern is load-bearing for CI; don't "simplify" it back to a top-level const.
+2. **Wrong health endpoint.** The first connectivity check probed `/rest/v1/` and got 401 with valid credentials. Nearly misdiagnosed as a bad publishable key — ruled out by testing all four key/header combinations and seeing all fail. Cause: newer Supabase projects restrict the PostgREST OpenAPI root. **`/auth/v1/health` with only the `apikey` header** is the correct check (200 with key, 401 without, so it genuinely validates credentials). `Authorization: Bearer` is for a signed-in user's JWT and must not carry the publishable key. A regression test locks both mistakes out.
+
+## Expo SDK pinned to 54 — deliberate, not accidental
+
+The project was scaffolded on SDK 57, but **Expo Go on the Play Store was still on 54.x** and refused to open the project ("Project is incompatible with this version of Expo Go"). This is a widely-reported store-lag issue, not a local misconfiguration. Since every stream demos on a real phone, the SDK is pinned to what Expo Go can actually run.
+
+Downgrade was clean: `expo@~54.0.0` + `jest-expo@~54.0.0`, then `npx expo install --fix` realigned React 19.2.3 → 19.1.0, RN 0.86.2 → 0.81.5, TypeScript 6.0.3 → 5.9.2. **Zero application code changed** — all 14 tests and typecheck passed immediately after. Rationale is documented in the README so it doesn't look accidental later.
+
+Alternatives rejected for a live stream: an EAS dev build (needs an Expo account plus a 10–20 min cloud build) and sideloading a newer Expo Go APK (fiddly, risky on air). Revisit the pin when the store app catches up, or if the project later moves to a custom dev build.
+
+## Environment notes for future sessions
+
+- **LAN mode is the working setup**: `npx expo start --lan`, then enter `exp://<LAN-IP>:8081` manually in Expo Go. Get the IP with `ip route get 1.1.1.1 | grep -oP 'src \K[0-9.]+'` — it was `192.168.29.40` on 2026-07-30 but may change.
+- **Tunnel mode (`--tunnel`) does not work out of the box** — it needs `@expo/ngrok` and prompts interactively, which fails in a non-interactive shell.
+- **Don't run `npm install` while Metro is running.** It crashed the dev server once (`ENOENT ... watch .jest-message-util-*`) because the file watcher followed a temp dir that npm deleted mid-install. Watchman is not installed, so Metro uses the more fragile fallback watcher.
+- Verifying the bundle without a phone: `curl "http://localhost:8081/index.bundle?platform=android&dev=true"` — HTTP 200 means it compiles.
+
+## Next action
+
+**PR-2 — Marketing Landing Page** per `docs/14-pr-execution-plan.md` §6: a small separate static one-pager (vision summary, GitHub link, waitlist), hosted free, deliberately *not* part of the app codebase. ~2h.
+
+Note PR-2 is the one PR in Phase 1 that ships no mobile-app code. If a demoable app change matters more on that particular stream day, consider swapping it with PR-3 (Authentication) — the execution plan's ordering is not load-bearing here.
