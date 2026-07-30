@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Family Knowledge Vault",
+    "slug": "family-knowledge-vault",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FAF6F0"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vibethroughcode.familyknowledgevault"
+    },
+    "android": {
+      "package": "com.vibethroughcode.familyknowledgevault",
+      "adaptiveIcon": {
+        "backgroundColor": "#FAF6F0",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
