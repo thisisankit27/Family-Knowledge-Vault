@@ -200,3 +200,41 @@ Alternatives rejected for a live stream: an EAS dev build (needs an Expo account
 **PR-2 — Marketing Landing Page** per `docs/14-pr-execution-plan.md` §6: a small separate static one-pager (vision summary, GitHub link, waitlist), hosted free, deliberately *not* part of the app codebase. ~2h.
 
 Note PR-2 is the one PR in Phase 1 that ships no mobile-app code. If a demoable app change matters more on that particular stream day, consider swapping it with PR-3 (Authentication) — the execution plan's ordering is not load-bearing here.
+
+---
+---
+
+# PR-2 Complete — Marketing Landing Page (2026-07-30)
+
+**Status: built and verified. PR-1 and PR-2 shipped the same day.**
+
+The "swap PR-2 for PR-3" suggestion above was raised and **declined** — correctly, since the concern was only that PR-2 alone would mean a stream with no visible app progress, and PR-1 had already delivered that on the same day.
+
+## What shipped
+
+- **`landing/index.html`** — semantic one-pager: hero, the problem, six module cards, four principles, follow-along section, footer.
+- **`landing/styles.css`** — palette copied deliberately from `src/theme.ts` so site and app read as one product. Light + dark via `prefers-color-scheme`, responsive grids, `prefers-reduced-motion` support, visible focus rings.
+- **`vercel.json`** — static deploy config.
+- **README** — landing section with local preview and deploy notes.
+
+## Decisions worth remembering
+
+- **No waitlist / no email capture.** Chosen over a Supabase-backed waitlist table and over third-party form services. The product is one screen old with nothing yet to notify anyone about, and skipping capture means no personal-data surface on a public page. Revisit when there's a real launch to announce — a Supabase table with insert-only RLS is the natural implementation and would be a good on-stream RLS demo.
+- **Plain HTML/CSS, no build step, no dependencies, no external network requests** (system fonts only). Keeps the marketing site completely isolated from the Expo app — it cannot affect the bundle, typecheck, or CI. Verified: 14/14 tests and typecheck still clean after adding it.
+- **`vercel.json` sets `buildCommand: null` and `installCommand: null`.** Without this Vercel finds the root `package.json` and tries to build the React Native app. This is the non-obvious part of the config — don't remove it.
+- **Hero CTA priority: YouTube primary, GitHub secondary.** For a build-in-public page the stream is the main draw; source is for the smaller slice who want it.
+- Channel URL is `https://www.youtube.com/@vibethroughcode` — used in hero, follow-along section, and footer.
+
+## Verification performed
+
+Rendered and screenshot-checked at 1280px and 390px widths, in both light and dark themes. All three external links return HTTP 200. All local assets serve 200. App tests and typecheck unaffected.
+
+## Outstanding — needs the user, not code
+
+**Vercel is not yet connected.** After merge: Vercel dashboard → Add New Project → pick this repo → Deploy. `vercel.json` supplies the settings, so no build config needs filling in. Until that's done the page exists in the repo but is not live anywhere.
+
+## Next action
+
+**PR-3 — Authentication** per `docs/14-pr-execution-plan.md` §6: Supabase Auth sign up / login / logout, auth-vs-app navigation stacks (React Navigation), tokens in Expo SecureStore. Backend tests: auth/RLS policies reject unauthenticated access. ~2h, flagged as tight — password reset may need to spill into a small follow-up.
+
+Will need ~2 min from the user in the Supabase dashboard to set email-confirmation behaviour (Authentication → Providers → Email). Decide then whether to require email confirmation for signup — leaving it on means test accounts need real inboxes, which slows live demos.
