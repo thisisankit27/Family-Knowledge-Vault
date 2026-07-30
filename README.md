@@ -73,8 +73,32 @@ src/
   services/          Business logic, independent of UI
     connection.ts    Supabase connectivity check
   theme.ts           Design tokens from docs/10-ui-ux-design.md
+landing/             Marketing one-pager (static, separate from the app)
 docs/                Planning corpus (vision → execution plan)
 ```
 
 Business logic lives in `src/services` and stays UI-free so it can be unit
 tested directly — see the testing split in [`CLAUDE.md`](CLAUDE.md).
+
+---
+
+## Landing Page
+
+`landing/` is a static marketing one-pager — plain HTML and CSS, no build step,
+no dependencies, and no external network requests (system fonts only). It is
+deliberately kept out of the app codebase so it can never affect the Expo
+bundle, the type check, or CI.
+
+Preview it locally with any static server:
+
+```bash
+cd landing && python3 -m http.server 4321
+```
+
+**Deployment (Vercel):** [`vercel.json`](vercel.json) sets `outputDirectory` to
+`landing` and disables the build and install steps — without that, Vercel would
+find the root `package.json` and try to build the React Native app. Connect the
+repository once in the Vercel dashboard and every push to `master` redeploys.
+
+Its palette is copied from `src/theme.ts` on purpose, so the site and the
+product read as one thing.
