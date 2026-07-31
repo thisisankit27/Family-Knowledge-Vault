@@ -38,5 +38,8 @@
       "**/*.test.tsx"
     ]
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "react-dom": "19.1.0"
+  }
 }
