@@ -1,7 +1,9 @@
 import 'react-native-url-polyfill/auto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import * as SecureStore from 'expo-secure-store';
 
 import { getSupabaseEnv } from './env';
+import { createChunkedSecureStore } from './secureStore';
 
 let client: SupabaseClient | undefined;
 
@@ -10,17 +12,19 @@ let client: SupabaseClient | undefined;
  *
  * Lazy for the same reason `getSupabaseEnv` is: constructing at module scope
  * would make merely importing this file fail wherever env vars are absent.
- *
- * Session persistence is deliberately left at its default — PR-3
- * (Authentication) wires this up to Expo SecureStore so auth tokens live in
- * the device keychain rather than plain AsyncStorage.
  */
 export function getSupabase(): SupabaseClient {
   if (!client) {
     const { url, key } = getSupabaseEnv();
     client = createClient(url, key, {
       auth: {
-        // No deep-link callback handling yet; revisit in PR-3.
+        // Tokens live in the device keychain (iOS) / EncryptedSharedPreferences
+        // (Android) rather than AsyncStorage, which is plain unencrypted disk.
+        storage: createChunkedSecureStore(SecureStore),
+        persistSession: true,
+        autoRefreshToken: true,
+        // React Native has no URL bar to read a callback out of. Deep-link
+        // handling arrives with password reset in PR-3b.
         detectSessionInUrl: false,
       },
     });

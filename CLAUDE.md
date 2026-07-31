@@ -43,7 +43,7 @@ Full detail lives in Claude's persistent memory (git-workflow / session-resumabi
 - **Always ask before creating a commit** — never commit automatically.
 - Planning doc updates, architectural decisions, and review checkpoints are valid commit boundaries, not just code.
 - If a commit completes one roadmap PR, prepare a full PR description (Objective, User Stories, Requirements satisfied, Implementation summary, Testing performed, Documentation updated, Remaining follow-up).
-- **PR creation: GitHub web UI, not `gh` CLI.** After pushing a day's branch, provide the ready-to-paste PR title/description and let the user open the PR on github.com themselves (same as PR #1). Don't attempt `gh pr create`.
+- **PR creation: Claude raises the PR via `gh pr create`; the user merges.** After pushing a day's branch, open the pull request yourself with the full description (Objective, Requirements satisfied, Implementation, Testing performed, Documentation updated, Remaining follow-up), then hand the user the URL. **Never merge** — merging into `master` is the user's call, always. (This reverses the earlier web-UI-only rule, changed on 2026-07-31 after PR #6.)
 
 ## Resumability
 

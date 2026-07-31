@@ -3,6 +3,7 @@
     "name": "Family Knowledge Vault",
     "slug": "family-knowledge-vault",
     "version": "0.1.0",
+    "scheme": "familyvault",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -27,6 +28,10 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ]
   }
 }
