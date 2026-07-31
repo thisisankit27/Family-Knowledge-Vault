@@ -287,6 +287,16 @@ Expo SecureStore is backed by the iOS keychain / Android EncryptedSharedPreferen
 
 Don't "simplify" this back to a plain `setItemAsync`.
 
+## `npm install` and `npm ci` do not agree — CI caught what local didn't
+
+PR #6's first CI run failed at **Install dependencies**, after local tests and typecheck were green.
+
+`expo-router` declares `react-dom` as an **optional peer with no version constraint**, so npm resolved it to `react-dom@19.2.8`, which requires `react@^19.2.8`. React is pinned at **19.1.0** for Expo SDK 54 alignment. `npm install` downgrades that conflict to an `ERESOLVE` warning and proceeds; **`npm ci` refuses outright**. So the break was invisible locally and unavoidable in CI.
+
+Fixed with `"overrides": { "react-dom": "19.1.0" }` in `package.json` rather than adding `react-dom` as a direct dependency — this project has no web target, and declaring `react-dom` would imply one.
+
+**The habit to keep:** before pushing anything that touched dependencies, run the CI sequence, not the dev sequence — `npm ci && npm run typecheck && npm test`. Stop Metro first; `npm ci` wipes `node_modules` and Metro's watcher dies with it (the PR-1 crash).
+
 ## Why there are no database tables in this PR
 
 `docs/08-database-design.md` §3–4 defines no `User`/`Profile` entity — the model is `auth.users` → `Member` (family-scoped). So PR-3 creates no tables, and there is no RLS to test yet. **RLS testing belongs to PR-5**, where `families` is the first real table. Full reasoning in `docs/14-pr-execution-plan.md` §6.1.
