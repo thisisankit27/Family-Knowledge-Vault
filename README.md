@@ -30,8 +30,7 @@ Built in public, one pull request per live stream. The full product vision lives
 ## Getting Started
 
 **Prerequisites:** Node 22+, a free Supabase project, and the
-[Expo Go](https://expo.dev/go) app on a phone (this repo targets devices, not
-simulators — the primary dev machine is Linux, so no iOS Simulator).
+[Expo Go](https://expo.dev/go) app on a phone.
 
 ```bash
 npm install
@@ -41,6 +40,20 @@ npm start                 # scan the QR code with Expo Go
 
 Your phone and computer need to be on the same Wi-Fi network. If they aren't,
 run `npx expo start --tunnel` instead (requires `@expo/ngrok`).
+
+A phone is the primary target — it's what gets demoed on stream, and it's the
+only way to exercise the camera and biometric features later phases need. The
+**Android emulator also works** and is the better choice for debugging (`adb
+logcat`, screenshots, no Wi-Fi dependency). It needs the Android SDK on your
+path first, which is not set by default:
+
+```bash
+export ANDROID_HOME="$HOME/Android/Sdk"
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+npm run android
+```
+
+There is no iOS Simulator here — the primary dev machine is Linux.
 
 ### Environment variables
 
@@ -65,20 +78,40 @@ See [`.env.example`](.env.example). All client-side values are prefixed
 ## Project Structure
 
 ```
-App.tsx              App shell (expands into navigation in PR-4)
+app/                 Routes (Expo Router — the file tree IS the navigation)
+  _layout.tsx        Providers + root stack
+  index.tsx          Entry: decides which stack you belong in
+  (auth)/            Signed-out screens; the layout holds the guard
+    login.tsx
+    signup.tsx
+  (app)/             Signed-in screens; PR-4 adds the tab shell here
+    index.tsx
 src/
+  components/        Reusable UI, no business logic
   lib/               Cross-cutting infrastructure
     env.ts           Environment resolution and validation
     supabase.ts      Shared Supabase client
+    secureStore.ts   Chunked keychain adapter for session storage
+  providers/
+    AuthProvider.tsx Single source of truth for the session
   services/          Business logic, independent of UI
+    auth.ts          Sign up / in / out, validation, error wording
     connection.ts    Supabase connectivity check
   theme.ts           Design tokens from docs/10-ui-ux-design.md
 landing/             Marketing one-pager (static, separate from the app)
 docs/                Planning corpus (vision → execution plan)
 ```
 
+There is no `App.tsx`. The entry point is `expo-router/entry`, set as `main` in
+`package.json`; Expo Router builds the navigator from `app/`.
+
 Business logic lives in `src/services` and stays UI-free so it can be unit
-tested directly — see the testing split in [`CLAUDE.md`](CLAUDE.md).
+tested directly — see the testing split in [`CLAUDE.md`](CLAUDE.md). Screens
+call services; they never touch the Supabase client's auth methods themselves.
+
+The `(auth)` / `(app)` split is a **rendering** boundary, not a security one.
+Real protection of family data is Row-Level Security in Postgres, which arrives
+with the first table in PR-5.
 
 ---
 

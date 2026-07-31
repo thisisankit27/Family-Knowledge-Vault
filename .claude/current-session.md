@@ -245,6 +245,66 @@ Vercel project settings that matter, in case it's ever reconnected:
 
 ## Next action
 
-**PR-3 — Authentication** per `docs/14-pr-execution-plan.md` §6: Supabase Auth sign up / login / logout, auth-vs-app navigation stacks (React Navigation), tokens in Expo SecureStore. Backend tests: auth/RLS policies reject unauthenticated access. ~2h, flagged as tight — password reset may need to spill into a small follow-up.
+**PR-3 — Authentication** per `docs/14-pr-execution-plan.md` §6. Done — see below.
 
-Will need ~2 min from the user in the Supabase dashboard to set email-confirmation behaviour (Authentication → Providers → Email). Decide then whether to require email confirmation for signup — leaving it on means test accounts need real inboxes, which slows live demos.
+---
+---
+
+# PR-3 Complete — Authentication (2026-07-31)
+
+**Status: built, tested, and verified on a physical phone via Expo Go. All seven manual checks passed, including the one that matters — kill the app completely, reopen, and land straight on the home screen with no login.**
+
+## Decisions taken at the start (user-confirmed)
+
+1. **Email confirmation OFF** in Supabase. Instant demo accounts, no inbox in the loop on stream. Carried risk, scheduled into Phase 10 — see `docs/14-pr-execution-plan.md` §6.1.
+2. **Password reset deferred to PR-3b.** The plan already flagged it as the thing to spill; keeping it out protected the 2h cap and avoided pulling deep-link handling into this PR.
+3. **Expo Router instead of React Navigation.** Reasoning in `docs/14-pr-execution-plan.md` §6.1. This decides the folder layout PR-4 builds inside.
+
+## What shipped
+
+- **`app/`** — Expo Router file tree. `_layout.tsx` (providers + root Stack), `index.tsx` (entry decision), `(auth)/login.tsx`, `(auth)/signup.tsx`, `(app)/index.tsx`. The guard lives in `(auth)/_layout.tsx` and `(app)/_layout.tsx`.
+- **`src/lib/secureStore.ts`** — chunked SecureStore adapter. The non-obvious part of this PR; see below.
+- **`src/services/auth.ts`** — `signUp` / `signIn` / `signOut` / `getSession`, plus `validateCredentials` and `describeAuthError`. Gateway-injected, UI-free, fully unit tested.
+- **`src/providers/AuthProvider.tsx`** — single source of truth for the session; also drives `startAutoRefresh` / `stopAutoRefresh` off `AppState`.
+- **`src/components/`** — `Button`, `TextField`, `CredentialsForm`, `AuthScreen`.
+- **`src/lib/supabase.ts`** — now wires `storage`, `persistSession`, `autoRefreshToken`.
+- **`app.json`** — `scheme: "familyvault"` (PR-3b needs it), `expo-router` + `expo-secure-store` plugins.
+- **Deleted `App.tsx` and `index.ts`** — entry point is `expo-router/entry` via `package.json` `main`.
+
+## Test status
+
+**51 tests passing** (was 14), typecheck clean. New: `src/lib/secureStore.test.ts` (11), `src/services/auth.test.ts` (26).
+
+## The SecureStore trap — the thing worth remembering
+
+Expo SecureStore is backed by the iOS keychain / Android EncryptedSharedPreferences and warns above **~2048 bytes per value**. A Supabase session (access JWT + refresh token + user record) routinely exceeds that once user metadata fills in. Storing it whole works on day one and **starts failing silently as the payload grows** — users randomly signed out, no error to trace. Worst possible failure mode for auth.
+
+`createChunkedSecureStore` splits values across `key.0`, `key.1`, … and stores the chunk *count* at `key`. Three details that are each covered by a test and each easy to get wrong:
+
+1. **Never split a surrogate pair.** A display name with an emoji or non-BMP script can put one on a chunk boundary; splitting it yields two lone surrogates that don't round-trip.
+2. **Delete orphaned chunks when a value shrinks.** Otherwise a later, longer write reads back a mix of old and new data.
+3. **A missing chunk returns `null`, not a truncated string.** Handing Supabase half a token is worse than asking for a fresh login.
+
+Don't "simplify" this back to a plain `setItemAsync`.
+
+## Why there are no database tables in this PR
+
+`docs/08-database-design.md` §3–4 defines no `User`/`Profile` entity — the model is `auth.users` → `Member` (family-scoped). So PR-3 creates no tables, and there is no RLS to test yet. **RLS testing belongs to PR-5**, where `families` is the first real table. Full reasoning in `docs/14-pr-execution-plan.md` §6.1.
+
+Note the layout guards in `app/(app)/_layout.tsx` are a *convenience* boundary, not a security one — they decide what is drawn. Real protection is RLS in Postgres, arriving in PR-5.
+
+## Open items carried forward
+
+- **No email ownership verification** (confirmation is off) → Phase 10.
+- **No password reset** → PR-3b.
+- **MFA (FR-004)** untouched → Phase 10.
+- Rate limiting on sign-in attempts is entirely Supabase's defaults right now; not reviewed.
+
+## Environment notes from this session
+
+- The **Android emulator works** on this machine (Android Studio SDK at `~/Android/Sdk`, `Pixel_7` AVD, Android 36.1 Play Store image, KVM available). It runs with **software rendering** — usable for debugging, noticeably less smooth than the phone. `ANDROID_HOME` is **not** in the shell profile; export it inline or `npm run android` won't find `adb`.
+- Physical-device testing uses `npx expo start --lan` → `exp://192.168.29.40:8081` (same Wi-Fi). Tunnel mode still fails non-interactively — see PR-1 notes.
+
+## Next action
+
+**PR-3b — Password Reset** (~1h) or **PR-4 — App Shell & Navigation** (~2h). PR-4 is the better stream if visible progress matters more; PR-3b is the better one if closing the auth story matters more. PR-4 builds its bottom-tab shell inside `app/(app)/`, so the Expo Router layout from this PR is the starting point either way.

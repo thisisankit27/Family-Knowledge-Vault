@@ -78,10 +78,40 @@ Consequences designed into the plan below rather than discovered mid-stream:
 |----|-------|------|-------|
 | 1 | Repo & Environment Init | 2h | Expo (TypeScript) app scaffold; Supabase project on free tier; env config; basic CI (lint + typecheck via GitHub Actions); app icon/splash placeholder. Demo: app boots on simulator/device and confirms a live Supabase connection. |
 | 2 | Marketing Landing Page | 2h | A small, separate static one-pager (not part of the app codebase) — vision summary, GitHub link, waitlist. Hosted free (Vercel/Netlify). One-and-done artifact, mainly to hype the series early. |
-| 3 | Authentication | 2h (tight — may spill password-reset to a small follow-up) | Supabase Auth: sign up / login / logout, auth vs. app navigation stacks (React Navigation), tokens in Expo SecureStore. Backend tests: default RLS/auth policies exist and reject unauthenticated access. |
+| 3 | Authentication | 2h (tight — may spill password-reset to a small follow-up) | Supabase Auth: sign up / login / logout, auth vs. app navigation stacks, tokens in Expo SecureStore. Backend tests: default RLS/auth policies exist and reject unauthenticated access. **Built — see §6.1 for three corrections made during the build.** |
+| 3b | Password Reset | ~1h | Deliberately split out of PR-3 to protect the 2h cap. "Forgot password" screen, Supabase reset email, and the deep-link handler that receives the callback — the first thing in the app that needs the `familyvault://` scheme. |
 | 4 | App Shell & Navigation | 2h | Bottom-tab navigation scaffold matching the IA domains (Dashboard, Family, Documents, etc. as empty placeholder screens), warm-neutral theme from the UI/UX doc, Dashboard layout shell. |
 | 5 | Create Family | 2h | `families` table + RLS ("owner sees only their family"), family creation flow, family profile screen. Backend tests: RLS isolation test — Family A cannot read Family B's row. This is the multi-tenancy boundary from the Database Design doc; test it seriously. |
 | 6 | Invite Members | 2h | Invitation table + join-by-code/link flow, member list screen, role assignment (Owner/Member default). Backend tests: invitation-token validation logic, member-level RLS. |
+
+## 6.1 Corrections made while building PR-3
+
+This plan was written before any application code existed. Three things in the PR-3 row turned
+out to be wrong once the code was real. Recorded here rather than silently edited away, because
+the reasoning matters more than the correction.
+
+**Expo Router replaces React Navigation.** The row named React Navigation. Expo Router is the
+default for SDK 54 and is built on React Navigation, so this is a change of interface, not of
+engine. It was chosen because the auth split *is* a routing concern: `app/(auth)` and `app/(app)`
+are route groups whose layouts hold the guard, so a new signed-out screen inherits protection by
+being placed in the folder — there is no per-screen check for anyone to forget. It also gives
+deep linking for free, which PR-3b needs for the password-reset callback and Phase 10 needs for
+email confirmation. Cost: it dictates the folder layout PR-4 builds its tab shell inside.
+
+**No tables, so no RLS to test yet.** The row promised "backend tests: default RLS/auth policies
+exist and reject unauthenticated access." There is nothing to apply RLS *to* — `docs/08-database-design.md`
+§3–4 defines no `User` or `Profile` entity, because the model is `auth.users` (Supabase-managed
+account) → `Member` (family-scoped identity). Inventing a `profiles` table purely to have
+something to test would have contradicted the database design. **RLS testing moves to PR-5**,
+where `families` becomes the first real table and the tenant boundary is genuinely at stake.
+PR-3's backend tests instead cover the auth service and the SecureStore adapter.
+
+**Email confirmation is off, and that is a carried risk.** Turning it on means every demo
+account needs a working inbox, which is unworkable live. So nothing currently proves a person
+owns the address they signed up with. This is scheduled into **Phase 10 (Trust & Security)** as
+a visible deliverable rather than left as invisible plumbing. The app already handles the
+confirmation-required path (`signUp` returns success with a null session and an explanatory
+message), so switching the toggle back on does not break the UI.
 
 ---
 
