@@ -84,14 +84,21 @@ app/                 Routes (Expo Router — the file tree IS the navigation)
   (auth)/            Signed-out screens; the layout holds the guard
     login.tsx
     signup.tsx
-  (app)/             Signed-in screens; PR-4 adds the tab shell here
-    index.tsx
+  (app)/             Signed-in screens
+    (tabs)/          The five-slot tab bar
+      index.tsx      Dashboard
+      family.tsx
+      documents.tsx
+      memories.tsx
+      more.tsx       The eight domains without a tab, plus the account
 src/
   components/        Reusable UI, no business logic
   lib/               Cross-cutting infrastructure
     env.ts           Environment resolution and validation
     supabase.ts      Shared Supabase client
     secureStore.ts   Chunked keychain adapter for session storage
+  navigation/
+    domains.ts       The IA domain registry the navigation renders from
   providers/
     AuthProvider.tsx Single source of truth for the session
   services/          Business logic, independent of UI
@@ -112,6 +119,12 @@ call services; they never touch the Supabase client's auth methods themselves.
 The `(auth)` / `(app)` split is a **rendering** boundary, not a security one.
 Real protection of family data is Row-Level Security in Postgres, which arrives
 with the first table in PR-5.
+
+`src/navigation/domains.ts` is the single declaration of the twelve information
+architecture domains. The tab bar and the More list both render from it, and
+`domains.test.ts` asserts every domain stays reachable exactly once — so
+navigation cannot silently lose a section. Adding a new domain means appending
+to one array, not editing screens.
 
 ---
 

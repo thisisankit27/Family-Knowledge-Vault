@@ -113,6 +113,33 @@ a visible deliverable rather than left as invisible plumbing. The app already ha
 confirmation-required path (`signUp` returns success with a null session and an explanatory
 message), so switching the toggle back on does not break the UI.
 
+## 6.2 Decisions made while building PR-4
+
+**Twelve IA domains, five tab slots.** `docs/06-information-architecture.md` §3 names twelve
+primary domains; `docs/10-ui-ux-design.md` §18 asks for comfortable one-handed targets, which
+caps a phone tab bar at about five. Four domains earned a permanent tab — **Home (Dashboard),
+Family, Documents, Memories** — chosen to match the build order, so tabs fill with real content
+as Phases 3 and 4 land rather than sitting empty for months. The remaining eight live behind
+**More**.
+
+Rejected: a "Vault" tab merging Documents + Medical + Recipes + Inventory (fewer top-level
+concepts, but it puts every stored thing one tap further away than the IA's browse path), and a
+four-tab bar (roomier targets, but it denies Memories a slot despite Memories being an entire
+phase of work).
+
+**The domain split is data, not markup.** `src/navigation/domains.ts` declares all twelve; the
+tab bar and the More list both render from it, and `domains.test.ts` asserts every IA domain is
+reachable exactly once, that the bar never exceeds five slots, and that no domain outside the IA
+appears. This is what keeps a UI-only PR honestly testable, and it makes IA §12's "new domains
+integrate without restructuring" concrete: adding Pets means appending to one array.
+
+**Empty states, never sample data.** Each tab states what will live there and which phase brings
+it. Inventing a placeholder passport would make the product look further along than it is, which
+is the wrong thing for a build-in-public project to show.
+
+**Light theme only.** `app.json` already sets `userInterfaceStyle: "light"`. A dark palette
+doubles every colour decision and is worth more once there are real screens to cover.
+
 ---
 
 # 7. Phases 2–12 — Condensed, Time-Boxed
