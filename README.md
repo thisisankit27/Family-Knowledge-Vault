@@ -84,6 +84,8 @@ tested directly — see the testing split in [`CLAUDE.md`](CLAUDE.md).
 
 ## Landing Page
 
+**Live at [family.vibethroughcode.com](https://family.vibethroughcode.com/)**
+
 `landing/` is a static marketing one-pager — plain HTML and CSS, no build step,
 no dependencies, and no external network requests (system fonts only). It is
 deliberately kept out of the app codebase so it can never affect the Expo
@@ -97,8 +99,13 @@ cd landing && python3 -m http.server 4321
 
 **Deployment (Vercel):** [`vercel.json`](vercel.json) sets `outputDirectory` to
 `landing` and disables the build and install steps — without that, Vercel would
-find the root `package.json` and try to build the React Native app. Connect the
-repository once in the Vercel dashboard and every push to `master` redeploys.
+find the root `package.json` and try to build the React Native app. Every push
+to `master` redeploys automatically.
+
+Keep the Vercel project's **Root Directory as `./`**, not `landing` — Vercel
+reads `vercel.json` from the Root Directory, so pointing it deeper would
+silently discard this configuration. The "Other" framework preset is correct.
+The page needs no environment variables.
 
 Its palette is copied from `src/theme.ts` on purpose, so the site and the
 product read as one thing.

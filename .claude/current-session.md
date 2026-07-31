@@ -229,9 +229,19 @@ The "swap PR-2 for PR-3" suggestion above was raised and **declined** — correc
 
 Rendered and screenshot-checked at 1280px and 390px widths, in both light and dark themes. All three external links return HTTP 200. All local assets serve 200. App tests and typecheck unaffected.
 
-## Outstanding — needs the user, not code
+## Deployed — live
 
-**Vercel is not yet connected.** After merge: Vercel dashboard → Add New Project → pick this repo → Deploy. `vercel.json` supplies the settings, so no build config needs filling in. Until that's done the page exists in the repo but is not live anywhere.
+**Custom domain: https://family.vibethroughcode.com/** (canonical)
+Vercel default, still serving: `https://family-knowledge-vault.vercel.app/`
+
+Vercel is connected to the repo and auto-deploys on every push to `master`. Verified after deploy on both hostnames: HTTP 200, valid SSL, `styles.css` and `favicon.png` 200 with correct MIME types, all three security headers present (`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`), `http://` 308-redirects to `https://`, all external links correct, desktop and mobile rendering identical to local.
+
+**Both hostnames answer 200 with identical content**, which is duplicate content from a search engine's perspective. Mitigated in markup: `landing/index.html` carries `<link rel="canonical">` and `og:url` pointing at the custom domain. If you'd rather fix it at the edge, Vercel's Domains settings can redirect the `.vercel.app` hostname to the primary domain instead — the canonical tag is the lighter-touch fix and doesn't break the fallback URL.
+
+Vercel project settings that matter, in case it's ever reconnected:
+- **Root Directory must stay `./`**, not `landing`. Vercel reads `vercel.json` from the Root Directory — pointing it at `landing/` would make it look for `landing/vercel.json`, which doesn't exist, silently discarding the output directory, headers, and disabled build.
+- **Application Preset "Other" is correct** — it reflects `"framework": null` in `vercel.json`. There's no framework to detect.
+- **No environment variables.** The page is pure static HTML and makes no network calls; Supabase keys belong only in the app's local `.env`.
 
 ## Next action
 
