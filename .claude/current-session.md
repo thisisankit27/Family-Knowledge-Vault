@@ -317,4 +317,61 @@ Note the layout guards in `app/(app)/_layout.tsx` are a *convenience* boundary, 
 
 ## Next action
 
-**PR-3b — Password Reset** (~1h) or **PR-4 — App Shell & Navigation** (~2h). PR-4 is the better stream if visible progress matters more; PR-3b is the better one if closing the auth story matters more. PR-4 builds its bottom-tab shell inside `app/(app)/`, so the Expo Router layout from this PR is the starting point either way.
+PR-4 was chosen over PR-3b — see the PR-4 section below for why. Merged as PR #6.
+
+---
+---
+
+# PR-4 Complete — App Shell & Navigation (2026-07-31)
+
+**Status: built and verified on a physical phone via Expo Go. PR-3 and PR-4 shipped the same day.**
+
+## Why PR-4 came before PR-3b
+
+Not stream aesthetics — **password reset needs a real inbox**. Every account we can create right now uses a fake address, because email confirmation is off. On top of that, Supabase's free tier rate-limits built-in auth emails to a handful per hour. So PR-3b live would mean burning a real address, hitting a rate limit mid-stream, or stopping to configure custom SMTP.
+
+**PR-3b is blocked on an email-infrastructure decision** (use a real test inbox vs. configure custom SMTP). Settle that before starting it.
+
+## What shipped
+
+- **`app/(app)/(tabs)/`** — five-slot tab bar: `index.tsx` (Dashboard), `family.tsx`, `documents.tsx`, `memories.tsx`, `more.tsx`, plus `_layout.tsx`.
+- **`src/navigation/domains.ts`** — the registry all navigation renders from. See below.
+- **`src/components/Screen.tsx`** — safe-area scroll chrome with a title block; bottom padding clears the tab bar.
+- **`src/components/EmptyState.tsx`** — designed empty state with an "Arriving in …" badge.
+- **`src/theme.ts`** — expanded: `surfaceSunken`, `primarySoft`, `warning`, `info`, `spacing.xs/xxl`, `radius.sm/full`, `typography.display/heading/subheading`, `touchTarget`.
+- **Deleted `app/(app)/index.tsx`** — it would collide with `(tabs)/index.tsx` on the same path. Its account panel and connection check moved into the More tab.
+
+## Test status
+
+**69 tests passing** (was 51), typecheck clean. New: `src/navigation/domains.test.ts` (18).
+
+## How a UI-only PR stayed testable — the idea worth reusing
+
+Twelve IA domains, five tab slots. Rather than hard-coding that split across five screen files, `src/navigation/domains.ts` declares it as data; the tab bar and the More list both render from it. `domains.test.ts` then asserts:
+
+- every domain in `docs/06-information-architecture.md` §3 is reachable **exactly once**
+- the tab bar never exceeds five slots
+- no domain outside the IA appears
+- the first tab is `dashboard` (Expo Router maps it to `index.tsx`)
+
+So a later PR that adds a tab and forgets to remove it from More — or silently drops Inventory — fails a test instead of shipping an unreachable corner of the product. **When a PR looks like "just UI", look for the decision inside it that can be expressed as data.**
+
+Full reasoning, including the rejected "Vault" tab and four-tab options: `docs/14-pr-execution-plan.md` §6.2.
+
+## Deliberate omissions
+
+- **More rows are not tappable.** A row that opens a blank screen is worse than one that says "Phase 5".
+- **No sample data anywhere.** A placeholder passport would overstate progress.
+- **Light theme only** — dark mode doubles every colour decision; better spent once real screens exist.
+
+## Gotcha found this session
+
+**`npm ci --dry-run` deletes `node_modules` before resolving.** It wiped the toolchain mid-build and `tsc` vanished with it. Use a real `npm ci` at the end of a dependency change rather than the dry run, and expect a full reinstall either way.
+
+## Next action
+
+**PR-5 — Create Family** per `docs/14-pr-execution-plan.md` §6: `families` table + RLS ("owner sees only their family"), family creation flow, family profile screen. Backend tests: RLS isolation — Family A cannot read Family B's row.
+
+This is the multi-tenancy boundary from `docs/08-database-design.md` and **the first PR with real RLS**, deferred here from PR-3. Test it seriously. It also needs a decision on how migrations are applied: SQL kept in the repo and pasted into the Supabase SQL editor, or adopting the Supabase CLI (`supabase link` + `db push`, which needs the database password).
+
+Alternative: **PR-3b — Password Reset**, once the email-infrastructure question above is settled.
