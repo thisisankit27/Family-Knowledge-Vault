@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { EmptyState } from '../../../src/components/EmptyState';
 import { Screen } from '../../../src/components/Screen';
 import { useAuth } from '../../../src/providers/AuthProvider';
+import { useFamily } from '../../../src/providers/FamilyProvider';
 import { theme } from '../../../src/theme';
 
 /**
@@ -17,19 +18,25 @@ import { theme } from '../../../src/theme';
  */
 export default function DashboardScreen() {
   const { session } = useAuth();
+  const { family } = useFamily();
   const name = session?.user.email?.split('@')[0] ?? 'there';
 
   return (
     <Screen
       title={`Hello, ${name}`}
-      subtitle="This is where your family's day will appear."
+      subtitle={
+        family
+          ? `${family.name} — this is where your family's day will appear.`
+          : "This is where your family's day will appear."
+      }
     >
-      <EmptyState
-        icon="people-outline"
-        title="Start with your family"
-        body="Nothing lives here until a family workspace exists. Creating one is the next thing we build."
-        arrivesIn="PR-5"
-      />
+      {!family && (
+        <EmptyState
+          icon="people-outline"
+          title="Start with your family"
+          body="Nothing lives here until a family workspace exists. Create one from the Family tab."
+        />
+      )}
 
       <View style={styles.card}>
         <Text style={styles.cardLabel}>What this screen will show</Text>

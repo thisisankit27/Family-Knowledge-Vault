@@ -140,6 +140,44 @@ is the wrong thing for a build-in-public project to show.
 **Light theme only.** `app.json` already sets `userInterfaceStyle: "light"`. A dark palette
 doubles every colour decision and is worth more once there are real screens to cover.
 
+## 6.3 What PR-5 discovered about Postgres RLS
+
+Two things in this PR were only found by running tests against the real database. Both would
+have shipped silently.
+
+**RLS applies the SELECT policy to `RETURNING`, and `RETURNING` is projected before `AFTER ROW`
+triggers fire.** The natural design — insert a family, let an `after insert` trigger add the
+creator as its first member — cannot work when the SELECT policy is membership-based. At the
+moment Postgres asks "may this caller see the row it just inserted?", the membership row does
+not exist yet, so creation fails every time.
+
+Creation is therefore a single `SECURITY DEFINER` function, `create_family(family_name)`, doing
+both inserts. Three consequences, all improvements: the ordering question disappears; creation
+is atomic, so no family can exist without an owner; and `created_by` is read from `auth.uid()`
+*inside* the function rather than accepted from the client, so no request shape can create a
+family in someone else's name. That is a stronger guarantee than a `WITH CHECK` policy, which
+can only validate what the client chose to send. Neither table needs an INSERT policy as a
+result — RLS denies by default, and the function is the only way in.
+
+**Policies are not privileges.** Every policy was correct and every query still failed with
+`42501 permission denied`. RLS only ever *narrows* what SQL privileges already permit; without a
+`GRANT`, the `authenticated` role cannot touch the table at all. Supabase's default privileges
+attach to objects created by the `postgres` role — which is why dashboard-created tables "just
+work" — but the CLI runs migrations under its own login role, so migration-created tables
+inherit nothing. Fixed in a second migration rather than by editing the first, since the first
+was already applied and history should record what actually happened.
+
+**The wider point for the roadmap:** every table from PR-6 onward sits behind these same
+policies and needs its own grants. The RLS suite is not optional ceremony — it is the only thing
+that caught either of these.
+
+**Testing shape established here.** Tests split in two: unit tests run in CI, and
+`*.rls.test.ts` integration tests are excluded via `testPathIgnorePatterns` and run deliberately
+with `npm run test:rls`. Destructive attempts are checked twice — the attacker must receive zero
+affected rows *and* the victim's own session must confirm the data is untouched, because under
+RLS an UPDATE or DELETE matching no visible row reports success rather than an error. A suite
+asserting only "no error was thrown" would pass against completely broken policies.
+
 ---
 
 # 7. Phases 2–12 — Condensed, Time-Boxed
