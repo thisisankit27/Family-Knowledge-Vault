@@ -436,6 +436,63 @@ Creation is now one `SECURITY DEFINER` function, `create_family(family_name)`, d
 
 ## Next action
 
-**PR-6 — Invite Members** per `docs/14-pr-execution-plan.md` §6: invitation table + join-by-code/link flow, member list screen, role assignment. This is where `family_members` finally gets an INSERT policy — narrowly, for redeemed invitations only. Backend tests: invitation-token validation, member-level RLS, and **grants on the new table** (see above).
+PR-6 was taken next. See below.
 
-Still deferred: **PR-3b — Password Reset**, blocked on the email-infrastructure decision (real test inbox vs. custom SMTP), gated on first real onboarding.
+---
+---
+
+# PR-6 Complete — Invite Members (2026-08-01)
+
+**Status: built, migration applied to the live project, 31 RLS tests passing against the real database, verified on a physical phone with two accounts.**
+
+## Decisions taken at the start (user-confirmed)
+
+1. **Short code, not a deep link.** In Expo Go a `familyvault://` link takes an `exp://…/--/join?code=…` form that behaves differently from a real build — more budget, worse demo.
+2. **Refuse joining a second family**, since there is no switcher UI and a joined-but-invisible family reads as data loss.
+
+## What shipped
+
+- **`supabase/migrations/20260801140000_create_invitations.sql`** — `family_invitations`, `generate_invitation_code()`, `create_invitation()`, `redeem_invitation()`, `list_family_members()`, policies, and grants.
+- **`src/services/invitation.ts`** — code normalisation, validation, error wording, create/redeem/revoke/list.
+- **`src/components/InviteCode.tsx`** — the code display, copy-to-clipboard, revoke.
+- **`app/(app)/(tabs)/family.tsx`** — join-or-create when family-less; member list + invite management when in a family.
+
+## Test status
+
+**132 CI tests** (was 90) and **31 RLS tests** (was 13). Typecheck clean.
+
+## The prediction from PR-5 that turned out wrong — in a good way
+
+PR-5's checkpoint said PR-6 would give `family_members` "a narrowly scoped INSERT policy for redeemed invitations". **It did not need one.** `redeem_invitation()` is a second `SECURITY DEFINER` function with its own preconditions, so membership still cannot be inserted by any client under any policy.
+
+**The reusable shape:** when a write has preconditions a policy cannot express — "this code exists, is unspent, is unexpired, and you are not already in a family" — a definer function beats widening the policy. Two instances now (`create_family`, `redeem_invitation`).
+
+## Design details worth keeping
+
+- **Code alphabet excludes I, O, 0, 1** — the pairs people misread. 32 symbols × 8 chars = 40 bits, single-use, 7-day expiry.
+- **Generated from `gen_random_uuid()`, not `random()`.** `random()` is a seeded PRNG; observing a few codes can reveal the sequence, and a code is a bearer credential.
+- **`list_family_members()` exists because `auth.users` is not client-readable.** Its `is_family_member` check is inside the query — without it, SECURITY DEFINER would let any signed-in user dump the email of every member of any family id they could guess. There is a test for exactly that.
+- **A refused redemption does not spend the code**, otherwise anyone who learns a code could destroy it by trying it.
+- **The screen refetches on tab focus, not just on mount.** Joining happens on another device, so a mount-only load leaves a dead code on screen looking live.
+
+## A test-quality mistake I made and fixed
+
+Two RLS tests were named for properties they did not check: the "already used" case passed because the *already-in-a-family* rule fired first, so single-use was never actually tested. Fixed by adding a fourth account (`rls-latecomer@example.com`) that belongs to no family, for whom nothing else can refuse.
+
+**The rule:** an assertion that something was refused only means something if nothing *else* could have refused it.
+
+## Capabilities that exist but have no UI — check for these
+
+Revocation shipped only because the user asked during review. The owner-only DELETE policy and its RLS test already existed, so the feature looked complete while being unreachable.
+
+**Still true of removing a member and leaving a family.** `family_members` has an owner-only DELETE policy and a passing test, and no interface. Scheduled into **PR-9 (Roles & Permissions)** — recorded in `docs/14-pr-execution-plan.md` §7.
+
+## Not testable from a client
+
+**Expiry.** There is no UPDATE policy on `family_invitations` (deliberately), so nothing can backdate one. Unit tests cover the message; the SQL comparison is one line.
+
+## Next action
+
+**PR-7 — Family Profiles** (Phase 2 opens) per `docs/14-pr-execution-plan.md` §7. Note Phase 2's Family Tree is already flagged for splitting, and PR-9 now also owns member removal and leaving a family.
+
+Still deferred: **PR-3b — Password Reset**, blocked on the email-infrastructure decision (real test inbox vs. custom SMTP), gated on first real onboarding rather than a date.

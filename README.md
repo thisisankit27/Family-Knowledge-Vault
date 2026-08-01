@@ -99,6 +99,15 @@ privileges already allow, and tables created by CLI migrations do not inherit
 Supabase's default privileges — see
 `supabase/migrations/20260801101500_grant_family_privileges.sql`.
 
+**Writes with preconditions belong in a `SECURITY DEFINER` function, not a
+policy.** Creating a family and redeeming an invitation both have rules a
+`WITH CHECK` expression cannot state, so neither `families` nor
+`family_members` has an INSERT policy at all — the functions are the only way
+in, and they derive the acting user from `auth.uid()` rather than trusting the
+client. Any function written this way must set `search_path = ''` and fully
+qualify every object it touches, or a caller can shadow a table and have it
+read with elevated rights.
+
 ---
 
 ## Project Structure
@@ -130,6 +139,7 @@ src/
   services/          Business logic, independent of UI
     auth.ts          Sign up / in / out, validation, error wording
     family.ts        Family creation and lookup
+    invitation.ts    Invite codes, redemption, member list
     connection.ts    Supabase connectivity check
   theme.ts           Design tokens from docs/10-ui-ux-design.md
 supabase/
