@@ -257,6 +257,158 @@ button:focus-visible {
   font-size: 0.9688rem;
 }
 
+/* ---------- Progress ---------- */
+
+/* Grid rather than flex-wrap: with three items of very different label widths,
+   wrapping put one on the first row and two on the second, which reads as a
+   layout accident. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: var(--space-lg) var(--space-xl);
+  margin-top: var(--space-xl);
+  max-width: 40rem;
+  padding: 0;
+  list-style: none;
+}
+
+.stats strong {
+  display: block;
+  font-size: clamp(2rem, 5vw, 2.75rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--primary);
+}
+
+.stats span {
+  font-size: 0.9375rem;
+  color: var(--text-muted);
+}
+
+/* Wins and gaps sit side by side at equal weight — the point is that neither
+   is buried. On a narrow screen they stack, wins first. */
+.honest {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: var(--space-lg);
+  margin-top: var(--space-xl);
+}
+
+.honest-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow);
+}
+
+.honest-heading {
+  font-size: 1rem;
+  margin-bottom: var(--space-md);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Colour is never the only signal (NFR-018) — the headings say which is which,
+   and the marks are characters rather than coloured shapes. */
+.honest-heading::before {
+  font-size: 0.875rem;
+}
+
+.honest-heading.works::before {
+  content: '✓';
+  color: #4f7a52;
+}
+
+.honest-heading.missing::before {
+  content: '○';
+  color: var(--text-muted);
+}
+
+.honest-col ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.honest-col li {
+  font-size: 0.9688rem;
+  color: var(--text-muted);
+}
+
+.honest-col strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.phases {
+  margin-top: var(--space-xl);
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.phase {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr auto;
+  gap: var(--space-md);
+  align-items: baseline;
+  padding: 0.75rem var(--space-md);
+  background: var(--surface);
+  font-size: 0.9375rem;
+}
+
+.phase-status {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.phase.shipped .phase-status {
+  color: #4f7a52;
+}
+
+.phase.building .phase-status {
+  color: var(--primary);
+}
+
+.phase.shipped .phase-name,
+.phase.building .phase-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.phase-name {
+  color: var(--text-muted);
+}
+
+.phase-note {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+@media (max-width: 34rem) {
+  .phase {
+    grid-template-columns: 5.5rem 1fr;
+  }
+
+  /* The one-word summary is the first thing worth dropping on a phone — the
+     phase name already carries the meaning. */
+  .phase-note {
+    display: none;
+  }
+}
+
 /* ---------- Build in public ---------- */
 
 .build {

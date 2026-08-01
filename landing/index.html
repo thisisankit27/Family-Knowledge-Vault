@@ -167,6 +167,116 @@
         </ul>
       </section>
 
+      <!--
+        Progress — updated at the end of every phase.
+
+        The update checklist lives in CLAUDE.md. Three things change each time:
+        the stats row, the two honest lists, and one phase's status class
+        (planned → building → shipped). Nothing here should ever claim
+        something the repository cannot back up.
+      -->
+      <section class="section wrap" id="progress">
+        <p class="eyebrow">Progress</p>
+        <h2>Phase 1 has shipped.</h2>
+        <p class="prose">
+          This is not a landing page for something that might get built. Every
+          claim below corresponds to merged code you can read right now — and
+          the gaps are listed just as plainly as the wins.
+        </p>
+
+        <!--
+          These numbers must match what a reader finds when they check.
+          "Pull requests" is the count in the linked merged list; "tests" is
+          `npm test` plus the row-level-security suite.
+        -->
+        <ul class="stats">
+          <li>
+            <strong>9</strong>
+            <span>pull requests merged</span>
+          </li>
+          <li>
+            <strong>163</strong>
+            <span>automated tests</span>
+          </li>
+          <li>
+            <strong>12</strong>
+            <span>phases planned, in public</span>
+          </li>
+        </ul>
+
+        <div class="honest">
+          <div class="honest-col">
+            <h3 class="honest-heading works">What works today</h3>
+            <ul>
+              <li>Create an account and sign in</li>
+              <li>Stay signed in — the session is held in the device keychain</li>
+              <li>Create a family, which owns everything else</li>
+              <li>Invite people with single-use codes that expire, or can be revoked</li>
+              <li>Join a family by entering a code</li>
+              <li>See who is in your family</li>
+            </ul>
+          </div>
+
+          <div class="honest-col">
+            <h3 class="honest-heading missing">What does not work yet</h3>
+            <ul>
+              <li>
+                <strong>No password reset.</strong> Forget your password today
+                and you are locked out.
+              </li>
+              <li>
+                <strong>Email addresses are not verified.</strong> Nothing yet
+                proves you own the address you signed up with.
+              </li>
+              <li>
+                <strong>Documents, medical records, memories and recipes are
+                empty.</strong> The sections exist; the features are Phases 3
+                to 6.
+              </li>
+              <li>
+                <strong>You cannot leave a family or remove someone.</strong>
+                The database permits it — the interface does not exist.
+              </li>
+              <li>
+                <strong>End-to-end encryption is designed, not built.</strong>
+                Planned for Phase 11, alongside digital legacy.
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <ol class="phases">
+          <li class="phase shipped">
+            <span class="phase-status">Shipped</span>
+            <span class="phase-name">1 · Welcome Home</span>
+            <span class="phase-note">Accounts, families, invitations</span>
+          </li>
+          <li class="phase building">
+            <span class="phase-status">Building</span>
+            <span class="phase-name">2 · Meet the Family</span>
+            <span class="phase-note">Profiles, relationships, roles</span>
+          </li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">3 · Preserve What Matters</span><span class="phase-note">Documents</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">4 · Family Memories</span><span class="phase-note">Photos, video, voice</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">5 · Family Health</span><span class="phase-note">Medical records</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">6 · Home &amp; Living</span><span class="phase-note">Recipes, inventory</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">7 · Family Timeline</span><span class="phase-note">Events, reminders</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">8 · Find Everything</span><span class="phase-note">Search</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">9 · Family Intelligence</span><span class="phase-note">OCR, assistant</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">10 · Trust &amp; Security</span><span class="phase-note">Emergency mode, audit</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">11 · Legacy</span><span class="phase-note">Letters, encryption</span></li>
+          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">12 · Premium</span><span class="phase-note">Storage, production</span></li>
+        </ol>
+
+        <p class="prose">
+          <a href="https://github.com/thisisankit27/Family-Knowledge-Vault/pulls?q=is%3Apr+is%3Amerged">
+            Read every merged pull request
+          </a>
+          — each one has its objective, the trade-offs, what was tested, and
+          what was deliberately left undone.
+        </p>
+      </section>
+
       <!-- Build in public -->
       <section class="section wrap" id="build">
         <div class="build">
@@ -180,7 +290,7 @@
           </p>
           <p class="status">
             <span class="dot" aria-hidden="true"></span>
-            In active development — Phase 1, Foundation
+            In active development — Phase 2, Meet the Family
           </p>
           <div class="actions">
             <a class="btn btn-primary" href="https://www.youtube.com/@vibethroughcode">
