@@ -1,6 +1,7 @@
 import { Redirect, Stack } from 'expo-router';
 
 import { useAuth } from '../../src/providers/AuthProvider';
+import { FamilyProvider } from '../../src/providers/FamilyProvider';
 
 /**
  * The signed-in stack — everything behind the login wall lives under this
@@ -18,5 +19,12 @@ export default function AppLayout() {
     return <Redirect href="/(auth)/login" />;
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  // Scoped to the signed-in stack rather than the app root: there is no family
+  // to load before somebody signs in, and this way the auth screens carry none
+  // of its state.
+  return (
+    <FamilyProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </FamilyProvider>
+  );
 }

@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/react": "~19.1.10",
+    "dotenv": "^17.4.2",
     "jest": "^29.7.0",
     "jest-expo": "~54.0.0",
     "typescript": "~5.9.2"
@@ -30,13 +31,18 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "test:rls": "jest --testPathIgnorePatterns=/node_modules/ --testPathPattern='\\.rls\\.test\\.ts$' --runInBand"
   },
   "jest": {
     "preset": "jest-expo",
     "testMatch": [
       "**/*.test.ts",
       "**/*.test.tsx"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "\\.rls\\.test\\.ts$"
     ]
   },
   "private": true,
