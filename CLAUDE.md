@@ -27,6 +27,36 @@ This is a **solo-founder, build-in-public project streamed live on YouTube**. On
 - If a PR's scope can't be built, tested, and demoed in ~2 hours, split it before starting rather than cutting corners mid-stream.
 - Full PR-by-PR breakdown and time estimates: `docs/14-pr-execution-plan.md`.
 
+## End of Every Phase: Update the Landing Page
+
+`landing/index.html` carries a **Progress** section, and it is updated as the last act of every
+phase — not when someone remembers. It is the public record of whether this project is real, so
+its whole value rests on being accurate.
+
+Four edits, all in the `#progress` section unless noted:
+
+1. **Stats row** — pull requests merged (`gh pr list --state merged` count), total automated
+   tests (`npm test` plus the RLS suite), phases planned.
+2. **"What works today"** — only things a stranger could actually do in the app.
+3. **"What does not work yet"** — the honest list. Source it from the *Open items* and
+   *Deliberate gaps* sections of `.claude/current-session.md`; those are written every PR, so
+   this costs nothing to keep current.
+4. **Phase list** — move the finished phase to `class="phase shipped"` and the next one to
+   `class="phase building"`. Also update the `.status` line in the *Follow along* section.
+
+**Rules for this section, in priority order:**
+
+- **Every number must match what a reader finds when they check.** The stats sit directly above
+  a link to the merged pull requests; if the count disagrees with that list, the page has done
+  the opposite of its job.
+- **Never claim a capability that has no interface.** "The database supports it" is not
+  shipped — this project has twice built something reachable only by tests.
+- **The gaps list is not optional and does not get quietly shortened.** It is the strongest
+  trust signal on the page; anyone can publish wins.
+- Verify rendering at 1280px and 390px, in both colour schemes, before committing.
+
+Screenshots of real screens are the intended next addition — deferred from Phase 1, not dropped.
+
 ## Testing Responsibility
 
 - **Backend** (services, DB functions, RLS policies, business logic): Claude writes and owns automated tests every PR — non-negotiable.
