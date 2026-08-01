@@ -70,8 +70,34 @@ See [`.env.example`](.env.example). All client-side values are prefixed
 |---|---|
 | `npm start` | Start the Expo dev server |
 | `npm run android` / `npm run ios` | Open on a connected device or emulator |
-| `npm test` | Run the Jest suite |
+| `npm test` | Run the Jest suite (what CI runs) |
+| `npm run test:rls` | Run the Row-Level Security suite against the live database |
 | `npm run typecheck` | Type-check without emitting |
+
+`npm test` deliberately excludes `*.rls.test.ts`: those tests talk to a real
+Supabase project, and CI has no credentials. Run them yourself after any change
+to a migration — they create two throwaway accounts on first run and clean up
+after themselves, so no setup is needed.
+
+### Database migrations
+
+Schema lives in `supabase/migrations/` and is applied with the Supabase CLI:
+
+```bash
+cd <repo root>                                        # .temp/ is written relative to cwd
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
+```
+
+Run `link` from the repository root — the CLI writes its link state (including
+a cached database password) relative to the current directory, so running it
+from elsewhere silently links the wrong place.
+
+**Every new table needs both policies and grants.** RLS only narrows what SQL
+privileges already allow, and tables created by CLI migrations do not inherit
+Supabase's default privileges — see
+`supabase/migrations/20260801101500_grant_family_privileges.sql`.
 
 ---
 
@@ -103,8 +129,11 @@ src/
     AuthProvider.tsx Single source of truth for the session
   services/          Business logic, independent of UI
     auth.ts          Sign up / in / out, validation, error wording
+    family.ts        Family creation and lookup
     connection.ts    Supabase connectivity check
   theme.ts           Design tokens from docs/10-ui-ux-design.md
+supabase/
+  migrations/        Schema, RLS policies, and grants — applied with the CLI
 landing/             Marketing one-pager (static, separate from the app)
 docs/                Planning corpus (vision → execution plan)
 ```

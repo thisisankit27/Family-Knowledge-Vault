@@ -370,8 +370,72 @@ Full reasoning, including the rejected "Vault" tab and four-tab options: `docs/1
 
 ## Next action
 
-**PR-5 — Create Family** per `docs/14-pr-execution-plan.md` §6: `families` table + RLS ("owner sees only their family"), family creation flow, family profile screen. Backend tests: RLS isolation — Family A cannot read Family B's row.
+PR-5 was taken next; PR-3b remains deferred. See below.
 
-This is the multi-tenancy boundary from `docs/08-database-design.md` and **the first PR with real RLS**, deferred here from PR-3. Test it seriously. It also needs a decision on how migrations are applied: SQL kept in the repo and pasted into the Supabase SQL editor, or adopting the Supabase CLI (`supabase link` + `db push`, which needs the database password).
+---
+---
 
-Alternative: **PR-3b — Password Reset**, once the email-infrastructure question above is settled.
+# PR-5 Complete — Create Family (2026-08-01)
+
+**Status: built, migrations applied to the live project, 13 RLS tests passing against the real database, verified on a physical phone.**
+
+## Decisions taken at the start (user-confirmed)
+
+1. **Supabase CLI for migrations**, not dashboard paste — migrations are versioned files reviewable in the PR diff.
+2. **`families` + `family_members` shipped together**, with policies checking membership rather than ownership, so PR-6 adds invitations without rewriting a policy.
+3. **RLS tests cover all four verbs** (SELECT/INSERT/UPDATE/DELETE), at the user's request — not just read isolation.
+
+## What shipped
+
+- **`supabase/config.toml`** + two migrations:
+  - `20260801093000_create_families.sql` — tables, membership helpers, `create_family()`, policies.
+  - `20260801101500_grant_family_privileges.sql` — table and function privileges (see below).
+- **`src/services/family.ts`** — `createFamily` / `listMyFamilies`, validation, error wording, plus `createSupabaseFamilyGateway` as the only place that knows how families are stored.
+- **`src/providers/FamilyProvider.tsx`** — current family, scoped to the signed-in stack.
+- **`app/(app)/(tabs)/family.tsx`** — create form when there is no family, profile when there is.
+- **`app/(app)/(tabs)/index.tsx`** — Dashboard resolves to the family name.
+- **`package.json`** — `dotenv` devDependency and a `test:rls` script.
+
+## Test status
+
+**90 CI tests** (was 69) plus **13 RLS integration tests** run separately. Typecheck clean.
+
+## Two real bugs the RLS tests caught — the reason they exist
+
+**1. RLS applies the SELECT policy to `RETURNING`, before `AFTER ROW` triggers fire.** The first design inserted a family and let an `after insert` trigger add the creator as owner. Because the SELECT policy is membership-based, Postgres asks "may you see this row?" while the membership row still does not exist — so **creation would have failed every single time**.
+
+Creation is now one `SECURITY DEFINER` function, `create_family(family_name)`, doing both inserts. Side benefits: atomic (no family without an owner), and `created_by` comes from `auth.uid()` *inside* the function, so **no request shape can create a family in someone else's name** — stronger than a `WITH CHECK` policy, which can only validate what the client sent. Neither table has an INSERT policy as a result.
+
+**2. Policies are not privileges.** Every policy was correct and every query returned `42501 permission denied`. RLS only narrows what SQL privileges already allow. Supabase's default privileges attach to objects created by the `postgres` role (hence dashboard tables "just work"), but **the CLI runs migrations under its own login role**, so migration-created tables inherit nothing and need explicit `grant`s.
+
+**Carry this into every future table:** new tables need both policies *and* grants, and only an integration test will tell you which is missing.
+
+## The recursion fix — still the load-bearing idea
+
+`families` SELECT needs "am I a member?" (reads `family_members`); `family_members` SELECT needs the same of itself → `infinite recursion detected in policy`. Broken with `SECURITY DEFINER` helpers `is_family_member()` / `is_family_owner()`, which bypass RLS inside the function. `set search_path = ''` on those is mandatory, not stylistic — without it a caller could shadow `family_members` and have the function read it with elevated rights.
+
+## Testing shape to reuse
+
+- Unit tests in CI; `*.rls.test.ts` excluded via `testPathIgnorePatterns`, run with `npm run test:rls`.
+- **Every destructive attempt is asserted twice**: the attacker gets zero affected rows, *and* the victim's own session confirms the data is untouched. Under RLS an UPDATE/DELETE matching no visible row **reports success**, so "no error thrown" proves nothing.
+- There is a positive test (`lets Bob rename his own family`). Without one, a policy denying everything passes every isolation test while making the product unusable.
+- The suite creates `rls-a@example.com` / `rls-b@example.com` on first run and deletes its families afterwards. No setup required.
+
+## Gotchas found this session
+
+- **`npm ci --dry-run` deletes `node_modules`** before resolving (found in PR-4, hit again).
+- **`--testPathIgnorePatterns=` with an empty value matches every path**, so it silently selects nothing. Use `--testPathIgnorePatterns=/node_modules/`.
+- **`supabase link` writes `.temp/` relative to the current directory.** Run it inside the project, or the link lands in `~/supabase/`. That directory also caches the database password in `pooler-url`.
+- Docker warnings during `db push` are only about caching a local schema catalog — irrelevant for a remote push.
+
+## Deliberate gaps
+
+- **Multi-family membership** is representable; `FamilyProvider` picks the first. No switcher UI, unscheduled.
+- **`created_by` is not pinned on UPDATE.** Once PR-6 allows a second owner, an owner could rewrite it. Close it then.
+- **No leave-family / delete-family UI**, though the policies permit both for owners.
+
+## Next action
+
+**PR-6 — Invite Members** per `docs/14-pr-execution-plan.md` §6: invitation table + join-by-code/link flow, member list screen, role assignment. This is where `family_members` finally gets an INSERT policy — narrowly, for redeemed invitations only. Backend tests: invitation-token validation, member-level RLS, and **grants on the new table** (see above).
+
+Still deferred: **PR-3b — Password Reset**, blocked on the email-infrastructure decision (real test inbox vs. custom SMTP), gated on first real onboarding.
