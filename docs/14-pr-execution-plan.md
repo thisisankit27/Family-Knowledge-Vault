@@ -178,6 +178,38 @@ affected rows *and* the victim's own session must confirm the data is untouched,
 RLS an UPDATE or DELETE matching no visible row reports success rather than an error. A suite
 asserting only "no error was thrown" would pass against completely broken policies.
 
+## 6.4 PR-6 — what invitations changed, and what they did not
+
+**The INSERT hole PR-5 predicted was never opened.** §6.3 said PR-6 would add "a narrowly scoped
+INSERT policy on family_members for redeemed invitations". It did not need to.
+`redeem_invitation()` is a second `SECURITY DEFINER` function with its own rules, so membership
+still cannot be inserted by any client under any policy. Keeping the table write-closed is
+strictly stronger than a narrow policy, and the pattern now has two instances — worth reaching
+for again whenever a write has preconditions a policy cannot express.
+
+**Codes over links.** Rejected a `familyvault://` deep link: in Expo Go it takes an
+`exp://…/--/join?code=…` form that behaves differently from a real build, so it costs budget and
+demos worse than the thing it replaces. An 8-character code avoids `I`, `O`, `0` and `1` — the
+characters people misread when copying by hand — giving 32 symbols and 40 bits, single-use, with
+a 7-day expiry. Generated from `gen_random_uuid()` rather than `random()`: `random()` is a seeded
+PRNG, and an invitation code is a bearer credential for a family's records.
+
+**Joining a second family is refused, deliberately.** The schema permits multiple memberships,
+but with no switcher UI a second family would be joined and then invisible — which reads as data
+loss. The rule lives in `redeem_invitation()` as four lines to delete when family switching
+ships, not as a schema constraint.
+
+**Reading the member list needed its own function.** `auth.users` is not client-readable, so a
+member list would otherwise show bare UUIDs. `list_family_members()` is `SECURITY DEFINER` with
+an `is_family_member` check *inside the query* — without that check it would let any signed-in
+user dump the email address of every member of any family id they could guess.
+
+**A capability with no UI is a gap, not a feature.** Revocation shipped only because it was asked
+for during review: the owner-only DELETE policy and its RLS test already existed, so the feature
+looked complete while being unreachable. **The same is currently true of removing a member** —
+`family_members` has an owner-only DELETE policy and a passing test, and no interface. That
+belongs to **PR-9 (Roles & Permissions)**; see §7.
+
 ---
 
 # 7. Phases 2–12 — Condensed, Time-Boxed
@@ -186,7 +218,7 @@ All estimates assume the 2-hour/day cadence and the testing split in §3.3. "Spl
 
 | Phase | PRs | Est. each | Adjustment notes |
 |---|---|---|---|
-| 2 — Meet the Family (7–10) | Family Profiles, Family Tree, Roles & Permissions, Activity Feed | 2h, except Family Tree | Family Tree as a real interactive graph is too big for 2h on mobile — **split**: PR-8 ships relationships data model + simple list view; a visual tree graph becomes a stretch/polish item, pushed to Phase 6+. Roles & Permissions is where the Checkpoint 1 "no permission matrix" open risk gets resolved as a real deliverable. |
+| 2 — Meet the Family (7–10) | Family Profiles, Family Tree, Roles & Permissions, Activity Feed | 2h, except Family Tree | Family Tree as a real interactive graph is too big for 2h on mobile — **split**: PR-8 ships relationships data model + simple list view; a visual tree graph becomes a stretch/polish item, pushed to Phase 6+. Roles & Permissions is where the Checkpoint 1 "no permission matrix" open risk gets resolved as a real deliverable. **It also owns removing a member and leaving a family** — PR-5 shipped the owner-only DELETE policy on `family_members` with a passing RLS test, but no interface, so the capability exists and is unreachable. |
 | 3 — Preserve What Matters (11–15) | Document Library, Categories, Viewer, Upload, Sharing | 2h, viewer maybe 2.5h | Upload via Expo ImagePicker/DocumentPicker + Supabase Storage — straightforward. PDF viewer needs a native lib (react-native-pdf); budget slightly over on that one PR only. |
 | 4 — Family Memories (16–20) | Memories, Albums, Stories, Voice Memories, Memory Timeline | 2h | Voice via Expo AV — natural fit. Reuses the upload pattern from Phase 3. |
 | 5 — Family Health (21–25) | Medical Dashboard, Reports, Doctors, Medicines, Vaccinations | 2h | Reuses the Documents CRUD pattern almost directly — low risk, likely the fastest phase. |
