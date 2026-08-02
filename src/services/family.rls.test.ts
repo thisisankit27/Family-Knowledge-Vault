@@ -108,7 +108,7 @@ describeRls('families RLS — one family cannot touch another', () => {
   describe('creating a family', () => {
     it('makes the creator its owner', async () => {
       const { data, error } = await alice
-        .from('family_members')
+        .from('family_users')
         .select('user_id, role')
         .eq('family_id', aliceFamilyId);
 
@@ -168,7 +168,7 @@ describeRls('families RLS — one family cannot touch another', () => {
 
     it('hides Bob’s membership rows from Alice', async () => {
       const { data, error } = await alice
-        .from('family_members')
+        .from('family_users')
         .select('user_id')
         .eq('family_id', bobFamilyId);
 
@@ -179,11 +179,11 @@ describeRls('families RLS — one family cannot touch another', () => {
 
   describe('INSERT', () => {
     it('stops Alice adding herself to Bob’s family', async () => {
-      // family_members has no INSERT policy at all, so this is denied by
-      // default — create_family() is the only thing that grants membership,
+      // family_users has no INSERT policy at all, so this is denied by
+      // default — create_family() is the only thing that grants access,
       // and it grants it only to the caller.
       const { data, error } = await alice
-        .from('family_members')
+        .from('family_users')
         .insert({ family_id: bobFamilyId, user_id: aliceId, role: 'owner' })
         .select('user_id');
 
@@ -191,7 +191,7 @@ describeRls('families RLS — one family cannot touch another', () => {
       expect(data).toBeNull();
 
       const check = await bob
-        .from('family_members')
+        .from('family_users')
         .select('user_id')
         .eq('family_id', bobFamilyId);
       expect(check.data).toEqual([{ user_id: bobId }]);
@@ -217,7 +217,7 @@ describeRls('families RLS — one family cannot touch another', () => {
 
     it('stops Alice promoting herself inside Bob’s family', async () => {
       const { data, error } = await alice
-        .from('family_members')
+        .from('family_users')
         .update({ role: 'owner' })
         .eq('family_id', bobFamilyId)
         .select('user_id');
@@ -226,7 +226,7 @@ describeRls('families RLS — one family cannot touch another', () => {
       expect(data).toEqual([]);
 
       const check = await bob
-        .from('family_members')
+        .from('family_users')
         .select('user_id, role')
         .eq('family_id', bobFamilyId);
       expect(check.data).toEqual([{ user_id: bobId, role: 'owner' }]);
@@ -263,7 +263,7 @@ describeRls('families RLS — one family cannot touch another', () => {
 
     it('stops Alice removing Bob from his own family', async () => {
       const { data, error } = await alice
-        .from('family_members')
+        .from('family_users')
         .delete()
         .eq('family_id', bobFamilyId)
         .select('user_id');
@@ -272,7 +272,7 @@ describeRls('families RLS — one family cannot touch another', () => {
       expect(data).toEqual([]);
 
       const check = await bob
-        .from('family_members')
+        .from('family_users')
         .select('user_id')
         .eq('family_id', bobFamilyId);
       expect(check.data).toEqual([{ user_id: bobId }]);

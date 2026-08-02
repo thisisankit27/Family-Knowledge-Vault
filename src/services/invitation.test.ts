@@ -3,14 +3,12 @@ import {
   createInvitation,
   describeInvitationError,
   INVITATION_CODE_LENGTH,
-  listMembers,
   listUsableInvitations,
   normaliseCode,
   redeemInvitation,
   revokeInvitation,
   selectUsableInvitations,
   validateCode,
-  type FamilyMember,
   type Invitation,
   type InvitationGateway,
 } from './invitation';
@@ -32,13 +30,6 @@ const invitation: Invitation = {
   redeemedAt: null,
 };
 
-const member: FamilyMember = {
-  userId: 'user-1',
-  email: 'nanima@example.com',
-  role: 'owner',
-  joinedAt: '2026-08-01T09:30:00.000Z',
-};
-
 function fakeGateway(overrides: Partial<InvitationGateway> = {}) {
   const calls: { method: string; [key: string]: unknown }[] = [];
   const gateway: InvitationGateway = {
@@ -49,10 +40,6 @@ function fakeGateway(overrides: Partial<InvitationGateway> = {}) {
     redeemInvitation: async (code) => {
       calls.push({ method: 'redeemInvitation', code });
       return { data: family, error: null };
-    },
-    listMembers: async (familyId) => {
-      calls.push({ method: 'listMembers', familyId });
-      return { data: [member], error: null };
     },
     listInvitations: async (familyId) => {
       calls.push({ method: 'listInvitations', familyId });
@@ -265,20 +252,5 @@ describe('revokeInvitation', () => {
       ok: false,
       message: 'You do not have permission to do that.',
     });
-  });
-});
-
-describe('listMembers', () => {
-  it('returns the members the gateway reports', async () => {
-    const { gateway } = fakeGateway();
-    expect(await listMembers(gateway, 'fam-1')).toEqual([member]);
-  });
-
-  it('returns an empty list on error', async () => {
-    const { gateway } = fakeGateway({
-      listMembers: async () => ({ data: null, error: { message: 'permission denied' } }),
-    });
-
-    expect(await listMembers(gateway, 'fam-1')).toEqual([]);
   });
 });

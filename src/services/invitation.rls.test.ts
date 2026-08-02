@@ -1,7 +1,7 @@
 /**
  * Invitation and membership RLS — run with `npm run test:rls`, excluded from CI.
  *
- * PR-5 established that neither `families` nor `family_members` has an INSERT
+ * PR-5 established that neither `families` nor `family_users` has an INSERT
  * policy: membership can only come into existence through a SECURITY DEFINER
  * function. This suite checks that adding invitations did not quietly weaken
  * that — the new function has its own rules, and they have to hold against a

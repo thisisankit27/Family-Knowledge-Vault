@@ -1,6 +1,7 @@
 import {
   createFamily,
   describeFamilyError,
+  getMyRole,
   listMyFamilies,
   MAX_FAMILY_NAME_LENGTH,
   validateFamilyName,
@@ -26,6 +27,10 @@ function fakeGateway(overrides: Partial<FamilyGateway> = {}) {
     listMyFamilies: async () => {
       calls.push({ method: 'listMyFamilies' });
       return { data: [family], error: null };
+    },
+    getMyRole: async () => {
+      calls.push({ method: 'getMyRole' });
+      return { data: 'owner' as const, error: null };
     },
     ...overrides,
   };
@@ -174,5 +179,30 @@ describe('listMyFamilies', () => {
     });
 
     expect(await listMyFamilies(gateway)).toEqual([]);
+  });
+});
+
+describe('getMyRole', () => {
+  it('returns the role the access table reports', async () => {
+    const { gateway } = fakeGateway();
+    expect(await getMyRole(gateway, 'fam-1', 'user-1')).toBe('owner');
+  });
+
+  it('returns null when the caller has no access', async () => {
+    const { gateway } = fakeGateway({
+      getMyRole: async () => ({ data: null, error: null }),
+    });
+
+    expect(await getMyRole(gateway, 'fam-1', 'user-1')).toBeNull();
+  });
+
+  it('returns null on a failed read rather than assuming a role', async () => {
+    // Guessing upward on failure would show owner-only controls to someone who
+    // may not be one. The safe direction to guess is "no permission".
+    const { gateway } = fakeGateway({
+      getMyRole: async () => ({ data: null, error: { message: 'Network request failed' } }),
+    });
+
+    expect(await getMyRole(gateway, 'fam-1', 'user-1')).toBeNull();
   });
 });
