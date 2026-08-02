@@ -493,6 +493,148 @@ Revocation shipped only because the user asked during review. The owner-only DEL
 
 ## Next action
 
-**PR-7 — Family Profiles** (Phase 2 opens) per `docs/14-pr-execution-plan.md` §7. Note Phase 2's Family Tree is already flagged for splitting, and PR-9 now also owns member removal and leaving a family.
+Phase 2 planning followed. See the Phase 2 checkpoint below.
 
-Still deferred: **PR-3b — Password Reset**, blocked on the email-infrastructure decision (real test inbox vs. custom SMTP), gated on first real onboarding rather than a date.
+---
+---
+
+# Phase 2 Planning Checkpoint — "Meet the Family" (2026-08-03)
+
+**Status: planning complete and approved. PR-7 in progress. Full review in the approved plan; this is the operative summary — do not redo the analysis.**
+
+## The finding that reshaped the phase
+
+`docs/08-database-design.md` §8 defines a **Member** as *"a person within the family"* who owns Documents, Medical Records, Recipes, Memories and Timeline Events. FR-010 gives them birthdays and blood groups; FR-011 attaches records to them.
+
+**A person is not an account.** A grandmother who never installs the app, a child, a deceased ancestor — all are members and all will own records. The `family_members` table shipped in PR-5 is `(family_id, user_id, role)`: an *access grant*. It cannot represent a person without a login and it is misnamed for what the rest of the product means by "member".
+
+Every record table from Phase 3 points at the person, so this is fixed now, while exactly five functions reference the table and nothing else does.
+
+## Confirmed decisions
+
+1. **Rename `family_members` → `family_users`** (accounts + role). New `family_members` = people. Future tables read `documents.member_id → family_members.id`.
+2. **Phase 2 is five PRs:** PR-7, PR-8, PR-9a, PR-9b, PR-10. PR-9 split because it was ~3.5h.
+3. **Record visibility decided in PR-9a, applied from Phase 3** — a `visibility text default 'family' check (in ('family','restricted'))` column on every record table *at creation time*. Retrofitting it across documents, medical, memories and recipes later is a migration plus a policy rewrite on each.
+4. **PR-3b is a release gate, not a roadmap item** (user's reframing — better than inserting it mid-phase). See the gate below.
+
+## The mechanism that stops PR-9a rewriting PR-7 and PR-8
+
+**Every policy from PR-7 onward calls an intent-named helper, never a role-named one.**
+
+| Helper | PR-7 body | PR-9a body |
+|---|---|---|
+| `has_family_access(family_id)` | any row in `family_users` | unchanged |
+| `can_manage_family(family_id)` | owner | owner |
+| `can_manage_members(family_id)` | owner | owner, admin |
+| `can_edit_people(family_id)` | any member | owner, admin, member |
+
+PR-9a edits four function bodies and **zero policies**. This is why the roadmap order survives; without it PR-9a would have to come first, opening the phase with a backend-only stream and breaking the vertical-slice rule.
+
+**PR-7 must therefore also migrate the eight existing policies** (on `families`, `family_users`, `family_invitations`) off `is_family_member` / `is_family_owner` and onto the new helpers, then drop the old two. Postgres will refuse to drop a function a policy depends on, so the order inside the migration matters.
+
+## PR order and one-line scope
+
+| PR | Scope | Budget |
+|---|---|---|
+| **7 Family Profiles** | rename; people table with `deleted_at`, `updated_at`, unique `(id, family_id)`; four helpers; auto-provision on create/join; list + add/edit | ~2h15 |
+| **8 Family Relationships** | `parent_of` / `spouse_of` / `sibling_of`; composite FKs; list + add form | ~2h15 |
+| **9a Roles & Matrix** | four roles; permission matrix doc; last-owner guard; role badges + change role; **the visibility decision** | ~2h25 |
+| **9b Membership Lifecycle** | remove member, leave family, transfer ownership | ~1h55 |
+| **10 Activity Feed** | one `family_activity` table, triggers, Dashboard feed | ~2h10 |
+
+**PR-8 should be renamed from "Family Tree"** — the visual tree is deferred to Phase 6+, and shipping a "Family Tree" that draws no tree contradicts the honesty standard now published on the landing page.
+
+## Cut lines (never cut the first three items)
+
+`deleted_at`, `updated_at`, and unique `(id, family_id)` are cheap now and migrations later — they survive any time pressure. Cuttable: PR-7's date of birth and blood group (ship name only); PR-8's `sibling_of`; PR-9a's matrix prose; PR-10's trigger sources beyond two tables.
+
+## Hidden dependencies
+
+1. **PR-7's rename rewrites five PR-5/PR-6 functions.** The 31 existing RLS tests are the regression gate and must pass unchanged.
+2. **PR-7 must add unique `(id, family_id)`** or PR-8's composite FK is impossible.
+3. **PR-7 must update `src/services/invitation.ts`** — `list_family_members` changes shape. `listMembers` and `FamilyMember` move to the new `member.ts`.
+4. **Removing a member must not delete the person** (9b). Their records survive; the confirmation copy must say so.
+5. **Correction to the plan, made during PR-7:** removal deletes only the `family_users` row and **leaves `family_members.user_id` intact**. The plan originally said to null it, which would make rejoin-relinking impossible — there would be nothing to match on. Keeping the link means `redeem_invitation` finds the existing person and creates no duplicate.
+6. **PR-9a's visibility decision blocks Phase 3**, not Phase 2.
+7. **PR-10's triggers must target the renamed tables.**
+
+## Release Gate — before any external tester
+
+Not a phase, not a PR. Must be fully green before anyone who is not the author signs in.
+
+- [ ] **Password reset** (PR-3b) — a forgotten password is currently a permanent lockout.
+- [ ] **Email verification enabled** — currently off, so nothing proves address ownership.
+- [ ] **Production email provider** — Supabase's built-in sender is rate-limited to a handful per hour. All three share this one dependency, which is why they are one gate.
+- [ ] **First external testers** — the outcome, once the above hold.
+
+Flagged as candidates, not assumed: auth rate-limit review, a data-handling statement (Checkpoint 1 finding #5, DPDP), account deletion / data export (finding #7).
+
+## Draft permission matrix (input to PR-9a)
+
+| Action | Owner | Admin | Member | Guest |
+|---|---|---|---|---|
+| View family, people, relationships | ✓ | ✓ | ✓ | ✓ |
+| Rename / delete family | ✓ | — | — | — |
+| Add / edit a person | ✓ | ✓ | ✓ | — |
+| Add / edit relationships | ✓ | ✓ | ✓ | — |
+| Create / revoke invitations | ✓ | ✓ | — | — |
+| Change roles | ✓ | — | — | — |
+| Remove a member | ✓ | ✓ (not owners) | — | — |
+| Leave the family | ✓ (unless last owner) | ✓ | ✓ | ✓ |
+| Transfer ownership | ✓ | — | — | — |
+| View activity | ✓ | ✓ | ✓ | — |
+| View records *(Phase 3+)* | ✓ | ✓ | ✓ | — |
+| View `restricted` records | ✓ | ✓ | subject only | — |
+| Delete records *(Phase 3+)* | ✓ | ✓ | own only | — |
+
+## Branch note
+
+PR #11 (landing theme toggle) was pushed just after PR #10 merged, so it missed that merge and is open on `local`. **PR-7 is therefore on `pr-7-family-profiles`, branched from `master`** — a deviation from the one-branch convention, taken so PR-7's diff is not bundled with the toggle. Merge #11, then this branch merges cleanly too.
+
+---
+---
+
+# PR-7 Complete — Family Profiles (2026-08-03)
+
+**Status: built, three migrations applied, 172 CI tests and 45 RLS tests passing, verified on a physical phone with both a new and a pre-existing account.**
+
+## What shipped
+
+- **`20260803090000_family_members_as_people.sql`** — renames the access table to `family_users`; creates `family_members` as people with `deleted_at`, `updated_at` and unique `(id, family_id)`; introduces the four intent helpers; moves all eight existing policies onto them and drops `is_family_member` / `is_family_owner`; adds `add_family_member` / `update_family_member`; redefines `list_family_members` to return people.
+- **`20260803120000_backfill_people_and_provision_on_access.sql`** — the defect fix, below.
+- **`src/services/member.ts`** + 39 unit tests; `src/services/member.rls.test.ts` (14 RLS tests).
+- **`src/components/MemberForm.tsx`**; `app/(app)/(tabs)/family/` is now a nested stack (`index`, `new`, `[memberId]`).
+- `FamilyRole` moved to `family.ts`; `listMembers` moved out of `invitation.ts` into `member.ts`.
+
+## The regression gate held, with one correction to the plan
+
+The rename rewrote five PR-5/PR-6 functions. All 31 existing RLS tests pass with **behaviour unchanged** — but three needed their *table name* updated, so the plan's phrasing ("must pass unchanged") was wrong in the literal sense. Tests that name a renamed table obviously move with it; what must survive untouched is what they assert.
+
+## The defect that shipped and was caught on device — remember this class
+
+Migration `...090000` created the people table empty and taught `create_family()` / `redeem_invitation()` to provision a person. **Both only run for new families and new joiners**, so every pre-existing family had access rows and no people: the member list was empty and the owner could not see themselves.
+
+Worse, the screen derived "am I the owner?" from that member list, so the owner **silently lost their invite controls** — no error, the buttons were simply absent.
+
+Two fixes, and the second matters more than the first:
+
+1. **Backfill**, `NOT EXISTS`-guarded so re-running is harmless.
+2. **Provisioning is now an `after insert` trigger on `family_users`**, not a step inside two functions. That duplication is *why* the case was missed — the rule lived in the two places that happened to exist when it was written. As a trigger it covers every future path that grants access, including PR-9b's ownership transfer.
+3. **Role now comes from `FamilyProvider`, read from the access table.** A failed read returns `null` (no permission) rather than a guess; a test pins that.
+
+**Standing rules taken from this** (also saved to persistent memory as `migration-backfill-bug-class`):
+- A migration adding a table that existing rows need entries in **must** include a backfill in the same migration. Ask: *what does this mean for data that already exists?*
+- "On X, also create Y" belongs in a trigger, not in each caller.
+- Authorization must read the record that grants it. Never infer it from a list or from derived UI state. On a failed read, deny.
+
+## Known gap, deliberately not closed here
+
+There is **no test asserting the invariant "every account with access has a person row."** Nothing in the suite would have caught this, and the class recurs whenever a later phase adds a table existing families need rows in. Worth adding early in PR-8.
+
+## Deliberate omissions
+
+Photos (needs Storage — Phase 3), contact fields, notes, deleting a person, and a native date picker (the birthday is a validated `YYYY-MM-DD` text field).
+
+## Next action
+
+**PR-8 — Family Relationships** (renamed from "Family Tree"; the visual tree stays deferred to Phase 6+). Composite foreign keys `(member_id, family_id)` are ready — `family_members` carries the required unique `(id, family_id)`.

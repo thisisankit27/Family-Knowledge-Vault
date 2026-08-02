@@ -99,6 +99,17 @@ privileges already allow, and tables created by CLI migrations do not inherit
 Supabase's default privileges — see
 `supabase/migrations/20260801101500_grant_family_privileges.sql`.
 
+**A person is not an account.** `family_users` is who can sign in;
+`family_members` is who is *in* the family, and most of them never will sign in
+— a grandparent, a child, an ancestor. Records from Phase 3 onward attach to
+`family_members`, not to accounts.
+
+**Migrations that add a table existing rows need entries in must backfill in
+the same migration**, and "when X happens, also create Y" belongs in a trigger
+rather than in each calling function. Both rules exist because PR-7 broke them
+and left every pre-existing family with no people — see
+`supabase/migrations/20260803120000_backfill_people_and_provision_on_access.sql`.
+
 **Writes with preconditions belong in a `SECURITY DEFINER` function, not a
 policy.** Creating a family and redeeming an invitation both have rules a
 `WITH CHECK` expression cannot state, so neither `families` nor
@@ -122,7 +133,7 @@ app/                 Routes (Expo Router — the file tree IS the navigation)
   (app)/             Signed-in screens
     (tabs)/          The five-slot tab bar
       index.tsx      Dashboard
-      family.tsx
+      family/        Nested stack: list, add a person, edit a person
       documents.tsx
       memories.tsx
       more.tsx       The eight domains without a tab, plus the account
@@ -135,11 +146,13 @@ src/
   navigation/
     domains.ts       The IA domain registry the navigation renders from
   providers/
-    AuthProvider.tsx Single source of truth for the session
+    AuthProvider.tsx   Single source of truth for the session
+    FamilyProvider.tsx Current family and the caller's role
   services/          Business logic, independent of UI
     auth.ts          Sign up / in / out, validation, error wording
-    family.ts        Family creation and lookup
-    invitation.ts    Invite codes, redemption, member list
+    family.ts        Family creation, lookup, and the caller's role
+    invitation.ts    Invite codes and redemption
+    member.ts        The people in a family, with or without accounts
     connection.ts    Supabase connectivity check
   theme.ts           Design tokens from docs/10-ui-ux-design.md
 supabase/
