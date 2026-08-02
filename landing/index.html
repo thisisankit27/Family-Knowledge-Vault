@@ -25,9 +25,36 @@
 
     <link rel="icon" href="favicon.png" />
     <link rel="stylesheet" href="styles.css" />
+
+    <!--
+      Runs before the body paints, on purpose. Reading the saved choice after
+      render would show the system theme for one frame and then swap — the
+      flash that makes theme toggles feel broken.
+
+      It also marks the document as scripted, so the toggle button only appears
+      where it can actually work. Without JavaScript the page still has both
+      themes; it simply follows the operating system, as it did before.
+    -->
+    <script>
+      (function () {
+        document.documentElement.classList.add('js');
+        try {
+          var saved = localStorage.getItem('theme');
+          if (saved === 'light' || saved === 'dark') {
+            document.documentElement.setAttribute('data-theme', saved);
+          }
+        } catch (error) {
+          /* Private mode can throw on localStorage. Fall back to the OS. */
+        }
+      })();
+    </script>
   </head>
 
   <body>
+    <button class="theme-toggle" type="button" id="theme-toggle" aria-label="Switch theme">
+      <span class="theme-icon" aria-hidden="true">☾</span>
+    </button>
+
     <main>
       <!-- Hero -->
       <header class="hero wrap">
@@ -321,5 +348,44 @@
         <a href="https://github.com/thisisankit27/Family-Knowledge-Vault">GitHub</a>
       </p>
     </footer>
+
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var button = document.getElementById('theme-toggle');
+        var icon = button.querySelector('.theme-icon');
+        var meta = document.querySelector('meta[name="theme-color"]');
+
+        // No stored choice means "whatever the operating system says".
+        function activeTheme() {
+          return (
+            root.getAttribute('data-theme') ||
+            (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          );
+        }
+
+        function apply(theme) {
+          var dark = theme === 'dark';
+          root.setAttribute('data-theme', theme);
+          icon.textContent = dark ? '☀' : '☾';
+          // The label names the action, not the state — a screen reader user
+          // needs to know what pressing it does.
+          button.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+          if (meta) meta.setAttribute('content', dark ? '#1c1917' : '#faf6f0');
+        }
+
+        apply(activeTheme());
+
+        button.addEventListener('click', function () {
+          var next = activeTheme() === 'dark' ? 'light' : 'dark';
+          try {
+            localStorage.setItem('theme', next);
+          } catch (error) {
+            /* Choice will not survive a reload, but the page still switches. */
+          }
+          apply(next);
+        });
+      })();
+    </script>
   </body>
 </html>

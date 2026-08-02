@@ -31,8 +31,20 @@
   --measure: 62ch;
 }
 
+/*
+ * Two ways in, and the order matters.
+ *
+ * The media query is the no-JavaScript path: the page has always followed the
+ * operating system, and still does if the toggle never runs. `:not([data-theme
+ * ='light'])` is what lets an explicit light choice win over a dark OS —
+ * without it the media query would keep overriding the person's decision.
+ *
+ * The attribute rule is the toggle's path. The values are duplicated because
+ * one rule lives inside a media query and one does not, so they cannot be
+ * merged into a single selector list. Change one, change both.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #1c1917;
     --surface: #262220;
     --text: #f0eae2;
@@ -42,6 +54,54 @@
     --border: #3a342f;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.24);
   }
+}
+
+:root[data-theme='dark'] {
+  --bg: #1c1917;
+  --surface: #262220;
+  --text: #f0eae2;
+  --text-muted: #a89e93;
+  --primary: #d9975c;
+  --primary-dark: #e8b184;
+  --border: #3a342f;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+/* ---------- Theme toggle ---------- */
+
+/*
+ * Hidden until the inline head script marks the document as scripted. A
+ * button that cannot do anything is worse than no button, and this page is
+ * meant to work with JavaScript disabled.
+ */
+.theme-toggle {
+  display: none;
+}
+
+.js .theme-toggle {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.js .theme-toggle:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary);
 }
 
 *,
