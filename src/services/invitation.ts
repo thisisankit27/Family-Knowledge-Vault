@@ -12,7 +12,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import type { Family, GatewayResult } from './family';
+import type { Family, FamilyRole, GatewayResult } from './family';
 
 export interface Invitation {
   id: string;
@@ -24,22 +24,12 @@ export interface Invitation {
   redeemedAt: string | null;
 }
 
-export interface FamilyMember {
-  userId: string;
-  email: string;
-  role: FamilyRole;
-  joinedAt: string;
-}
-
-export type FamilyRole = 'owner' | 'member';
-
 export interface InvitationGateway {
   createInvitation(input: {
     familyId: string;
     role: FamilyRole;
   }): Promise<GatewayResult<Invitation>>;
   redeemInvitation(code: string): Promise<GatewayResult<Family>>;
-  listMembers(familyId: string): Promise<GatewayResult<FamilyMember[]>>;
   listInvitations(familyId: string): Promise<GatewayResult<Invitation[]>>;
   revokeInvitation(id: string): Promise<{ error: { message: string } | null }>;
 }
@@ -166,15 +156,6 @@ export async function revokeInvitation(
   return { ok: true };
 }
 
-export async function listMembers(
-  gateway: InvitationGateway,
-  familyId: string,
-): Promise<FamilyMember[]> {
-  const { data, error } = await gateway.listMembers(familyId);
-  if (error || !data) return [];
-  return data;
-}
-
 /** Only invitations that can still be used — spent and expired ones are noise. */
 export function selectUsableInvitations(
   invitations: Invitation[],
@@ -206,13 +187,6 @@ interface InvitationRow {
   redeemed_at: string | null;
 }
 
-interface MemberRow {
-  user_id: string;
-  email: string;
-  role: FamilyRole;
-  joined_at: string;
-}
-
 interface FamilyRow {
   id: string;
   name: string;
@@ -229,15 +203,6 @@ function toInvitation(row: InvitationRow): Invitation {
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     redeemedAt: row.redeemed_at,
-  };
-}
-
-function toMember(row: MemberRow): FamilyMember {
-  return {
-    userId: row.user_id,
-    email: row.email,
-    role: row.role,
-    joinedAt: row.joined_at,
   };
 }
 
@@ -271,17 +236,6 @@ export function createSupabaseInvitationGateway(
           : null,
         error,
       };
-    },
-
-    async listMembers(familyId) {
-      // A function rather than a table read: auth.users is not client-readable,
-      // so email addresses can only come from a definer function that checks
-      // the caller shares the family.
-      const { data, error } = await client.rpc('list_family_members', {
-        target_family: familyId,
-      });
-      const rows = (data ?? null) as MemberRow[] | null;
-      return { data: rows ? rows.map(toMember) : null, error };
     },
 
     async listInvitations(familyId) {

@@ -24,13 +24,21 @@ import {
 import { getSupabase } from '../lib/supabase';
 import {
   createSupabaseFamilyGateway,
+  getMyRole,
   listMyFamilies,
   type Family,
+  type FamilyRole,
 } from '../services/family';
 import { useAuth } from './AuthProvider';
 
 interface FamilyContextValue {
   family: Family | null;
+  /**
+   * The caller's role, read from the access table rather than inferred from
+   * the member list — a family with access rows but no people once made every
+   * owner look like a stranger, and their controls vanished silently.
+   */
+  role: FamilyRole | null;
   /** True while the first load for the current session is in flight. */
   loading: boolean;
   /** Call after creating a family so every screen sees it at once. */
@@ -44,21 +52,24 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   const userId = session?.user.id ?? null;
 
   const [family, setFamily] = useState<Family | null>(null);
+  const [role, setRole] = useState<FamilyRole | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     if (!userId) {
       setFamily(null);
+      setRole(null);
       setLoading(false);
       return;
     }
 
     setLoading(true);
     try {
-      const families = await listMyFamilies(
-        createSupabaseFamilyGateway(getSupabase()),
-      );
-      setFamily(families[0] ?? null);
+      const gateway = createSupabaseFamilyGateway(getSupabase());
+      const families = await listMyFamilies(gateway);
+      const current = families[0] ?? null;
+      setFamily(current);
+      setRole(current ? await getMyRole(gateway, current.id, userId) : null);
     } finally {
       setLoading(false);
     }
@@ -80,8 +91,8 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ family, loading, refresh }),
-    [family, loading, refresh],
+    () => ({ family, role, loading, refresh }),
+    [family, role, loading, refresh],
   );
 
   return <FamilyContext.Provider value={value}>{children}</FamilyContext.Provider>;

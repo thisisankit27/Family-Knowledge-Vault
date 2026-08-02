@@ -1,33 +1,36 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Button } from '../../../src/components/Button';
-import { InviteCode } from '../../../src/components/InviteCode';
-import { Screen } from '../../../src/components/Screen';
-import { TextField } from '../../../src/components/TextField';
-import { getSupabase } from '../../../src/lib/supabase';
-import { TAB_DOMAINS } from '../../../src/navigation/domains';
-import { useAuth } from '../../../src/providers/AuthProvider';
-import { useFamily } from '../../../src/providers/FamilyProvider';
+import { Button } from '../../../../src/components/Button';
+import { InviteCode } from '../../../../src/components/InviteCode';
+import { Screen } from '../../../../src/components/Screen';
+import { TextField } from '../../../../src/components/TextField';
+import { getSupabase } from '../../../../src/lib/supabase';
+import { TAB_DOMAINS } from '../../../../src/navigation/domains';
+import { useAuth } from '../../../../src/providers/AuthProvider';
+import { useFamily } from '../../../../src/providers/FamilyProvider';
 import {
   createFamily,
   createSupabaseFamilyGateway,
   MAX_FAMILY_NAME_LENGTH,
   type Family,
-} from '../../../src/services/family';
+} from '../../../../src/services/family';
 import {
   createInvitation,
   createSupabaseInvitationGateway,
-  listMembers,
   listUsableInvitations,
   redeemInvitation,
   revokeInvitation,
-  type FamilyMember,
   type Invitation,
-} from '../../../src/services/invitation';
-import { theme } from '../../../src/theme';
+} from '../../../../src/services/invitation';
+import {
+  createSupabaseMemberGateway,
+  listMembers,
+  type Member,
+} from '../../../../src/services/member';
+import { theme } from '../../../../src/theme';
 
 const domain = TAB_DOMAINS.find((entry) => entry.id === 'family')!;
 
@@ -42,20 +45,16 @@ export default function FamilyScreen() {
     );
   }
 
-  return family ? <FamilyProfile family={family} /> : <NoFamily />;
+  return family ? <FamilyHome family={family} /> : <NoFamily />;
 }
 
 /**
  * Two ways in, and they are not equal weight: most people arrive because
- * somebody sent them a code, so joining is offered first and creating is the
- * quieter option beneath it.
+ * somebody sent them a code, so joining is offered first.
  */
 function NoFamily() {
   return (
-    <Screen
-      title="Join or create"
-      subtitle="Everything in the vault belongs to a family."
-    >
+    <Screen title="Join or create" subtitle="Everything in the vault belongs to a family.">
       <JoinFamily />
       <View style={styles.divider} />
       <CreateFamily />
@@ -121,9 +120,7 @@ function CreateFamily() {
     try {
       // No creator passed: the database reads it from the session, so this
       // screen cannot create a family in anyone else's name even if it tried.
-      const result = await createFamily(createSupabaseFamilyGateway(getSupabase()), {
-        name,
-      });
+      const result = await createFamily(createSupabaseFamilyGateway(getSupabase()), { name });
       if (!result.ok) {
         setError(result.message);
         return;
@@ -157,9 +154,13 @@ function CreateFamily() {
   );
 }
 
-function FamilyProfile({ family }: { family: Family }) {
+function FamilyHome({ family }: { family: Family }) {
   const { session } = useAuth();
-  const [members, setMembers] = useState<FamilyMember[]>([]);
+  // From the access table, not from the member list below. Deriving it from
+  // the list meant a family with no people rows stripped its owner of the
+  // invite controls, with nothing on screen to explain why.
+  const { role } = useFamily();
+  const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviting, setInviting] = useState(false);
@@ -167,12 +168,12 @@ function FamilyProfile({ family }: { family: Family }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const gateway = createSupabaseInvitationGateway(getSupabase());
+    const supabase = getSupabase();
     setLoading(true);
     try {
       const [nextMembers, nextInvitations] = await Promise.all([
-        listMembers(gateway, family.id),
-        listUsableInvitations(gateway, family.id),
+        listMembers(createSupabaseMemberGateway(supabase), family.id),
+        listUsableInvitations(createSupabaseInvitationGateway(supabase), family.id),
       ]);
       setMembers(nextMembers);
       setInvitations(nextInvitations);
@@ -181,27 +182,21 @@ function FamilyProfile({ family }: { family: Family }) {
     }
   }, [family.id]);
 
-  // Refetched on focus, not just on mount. Somebody joining or spending a code
-  // happens on another device, so this screen is stale the moment it is left —
-  // and a used code lingering on screen looks like it still works.
+  // On focus rather than on mount: people join and codes get spent on another
+  // device, and returning from the edit screen must show the new name.
   useFocusEffect(
     useCallback(() => {
       void load();
     }, [load]),
   );
 
-  const isOwner = members.some(
-    (member) => member.userId === session?.user.id && member.role === 'owner',
-  );
-
   async function handleInvite() {
     setInviting(true);
     setError(null);
     try {
-      const result = await createInvitation(
-        createSupabaseInvitationGateway(getSupabase()),
-        { familyId: family.id },
-      );
+      const result = await createInvitation(createSupabaseInvitationGateway(getSupabase()), {
+        familyId: family.id,
+      });
       if (!result.ok) {
         setError(result.message);
         return;
@@ -216,10 +211,7 @@ function FamilyProfile({ family }: { family: Family }) {
     setRevokingId(id);
     setError(null);
     try {
-      const result = await revokeInvitation(
-        createSupabaseInvitationGateway(getSupabase()),
-        id,
-      );
+      const result = await revokeInvitation(createSupabaseInvitationGateway(getSupabase()), id);
       if (!result.ok) {
         setError(result.message);
         return;
@@ -234,22 +226,29 @@ function FamilyProfile({ family }: { family: Family }) {
     <Screen title={family.name} subtitle={domain.summary}>
       <View style={styles.card}>
         <Text style={styles.cardLabel}>
-          {members.length === 1 ? '1 member' : `${members.length} members`}
+          {members.length === 1 ? '1 person' : `${members.length} people`}
         </Text>
+
         {loading ? (
           <ActivityIndicator color={theme.colors.primary} />
         ) : (
           members.map((member) => (
             <MemberRow
-              key={member.userId}
+              key={member.id}
               member={member}
               isYou={member.userId === session?.user.id}
             />
           ))
         )}
+
+        <Button
+          label="Add someone"
+          variant="quiet"
+          onPress={() => router.push('/(app)/(tabs)/family/new')}
+        />
       </View>
 
-      {isOwner && (
+      {role === 'owner' && (
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Invite someone</Text>
 
@@ -289,22 +288,31 @@ function FamilyProfile({ family }: { family: Family }) {
   );
 }
 
-function MemberRow({ member, isYou }: { member: FamilyMember; isYou: boolean }) {
+function MemberRow({ member, isYou }: { member: Member; isYou: boolean }) {
+  // Account holders and relatives with no login are one list, not two. The
+  // difference is a quiet subtitle — a person who never signs in is no less a
+  // member of the family.
+  const detail = member.email ? (member.role === 'owner' ? 'Owner' : 'Member') : 'No account';
+
   return (
-    <View style={styles.memberRow}>
+    <Pressable
+      onPress={() => router.push(`/(app)/(tabs)/family/${member.id}`)}
+      accessibilityRole="button"
+      accessibilityLabel={`Edit ${member.displayName}`}
+      style={({ pressed }) => [styles.memberRow, pressed && styles.memberRowPressed]}
+    >
       <View style={styles.avatar}>
         <Ionicons name="person-outline" size={18} color={theme.colors.primary} />
       </View>
       <View style={styles.memberText}>
-        <Text style={styles.memberEmail} numberOfLines={1}>
-          {member.email}
+        <Text style={styles.memberName} numberOfLines={1}>
+          {member.displayName}
           {isYou ? ' (you)' : ''}
         </Text>
-        <Text style={styles.memberRole}>
-          {member.role === 'owner' ? 'Owner' : 'Member'}
-        </Text>
+        <Text style={styles.memberDetail}>{detail}</Text>
       </View>
-    </View>
+      <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+    </Pressable>
   );
 }
 
@@ -348,6 +356,9 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
     minHeight: theme.touchTarget,
   },
+  memberRowPressed: {
+    opacity: 0.6,
+  },
   avatar: {
     width: 36,
     height: 36,
@@ -360,12 +371,12 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
-  memberEmail: {
+  memberName: {
     fontSize: theme.typography.body,
     fontWeight: '600',
     color: theme.colors.text,
   },
-  memberRole: {
+  memberDetail: {
     fontSize: theme.typography.caption,
     color: theme.colors.textMuted,
   },

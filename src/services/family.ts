@@ -13,6 +13,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+/** A person's level of access to a family. Widened to four values in PR-9a. */
+export type FamilyRole = 'owner' | 'member';
+
 export interface Family {
   id: string;
   name: string;
@@ -37,6 +40,7 @@ export interface GatewayResult<T> {
 export interface FamilyGateway {
   createFamily(input: CreateFamilyInput): Promise<GatewayResult<Family>>;
   listMyFamilies(): Promise<GatewayResult<Family[]>>;
+  getMyRole(familyId: string, userId: string): Promise<GatewayResult<FamilyRole>>;
 }
 
 export type FamilyOutcome =
@@ -125,6 +129,28 @@ export async function listMyFamilies(gateway: FamilyGateway): Promise<Family[]> 
   return data;
 }
 
+/**
+ * The caller's role in a family, read from the access table.
+ *
+ * Deliberately not derived from the member list. It was, and a migration that
+ * left a family with access rows but no people made every owner look like a
+ * non-member — the invite controls simply disappeared, with no error anywhere.
+ * Permission must come from the record that grants it.
+ *
+ * Null means no access, which is also what a failed read returns: from the
+ * UI's point of view they are the same thing, and assuming a role on failure
+ * is the dangerous direction to guess in.
+ */
+export async function getMyRole(
+  gateway: FamilyGateway,
+  familyId: string,
+  userId: string,
+): Promise<FamilyRole | null> {
+  const { data, error } = await gateway.getMyRole(familyId, userId);
+  if (error || !data) return null;
+  return data;
+}
+
 interface FamilyRow {
   id: string;
   name: string;
@@ -166,6 +192,19 @@ export function createSupabaseFamilyGateway(client: SupabaseClient): FamilyGatew
         .returns<FamilyRow[]>();
 
       return { data: data ? data.map(toFamily) : null, error };
+    },
+
+    async getMyRole(familyId, userId) {
+      // `maybeSingle` rather than `single`: no access is a legitimate answer,
+      // not an error, and `single` would turn it into one.
+      const { data, error } = await client
+        .from('family_users')
+        .select('role')
+        .eq('family_id', familyId)
+        .eq('user_id', userId)
+        .maybeSingle<{ role: FamilyRole }>();
+
+      return { data: data?.role ?? null, error };
     },
   };
 }
