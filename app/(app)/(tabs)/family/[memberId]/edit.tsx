@@ -3,16 +3,16 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
-import { MemberForm } from '../../../../src/components/MemberForm';
-import { getSupabase } from '../../../../src/lib/supabase';
-import { useFamily } from '../../../../src/providers/FamilyProvider';
+import { MemberForm } from '../../../../../src/components/MemberForm';
+import { getSupabase } from '../../../../../src/lib/supabase';
+import { useFamily } from '../../../../../src/providers/FamilyProvider';
 import {
   createSupabaseMemberGateway,
   listMembers,
   updateMember,
   type Member,
-} from '../../../../src/services/member';
-import { theme } from '../../../../src/theme';
+} from '../../../../../src/services/member';
+import { theme } from '../../../../../src/theme';
 
 export default function EditMemberScreen() {
   const { memberId } = useLocalSearchParams<{ memberId: string }>();
@@ -58,16 +58,6 @@ export default function EditMemberScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      {!!member.email && (
-        <View style={styles.account}>
-          <Text style={styles.accountLabel}>Signs in as</Text>
-          <Text style={styles.accountValue}>{member.email}</Text>
-          <Text style={styles.accountRole}>
-            {member.role === 'owner' ? 'Owner' : 'Member'}
-          </Text>
-        </View>
-      )}
-
       <MemberForm
         initial={{
           displayName: member.displayName,
@@ -99,28 +89,5 @@ const styles = StyleSheet.create({
   content: {
     padding: theme.spacing.lg,
     gap: theme.spacing.lg,
-  },
-  account: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.lg,
-    gap: theme.spacing.xs,
-  },
-  accountLabel: {
-    fontSize: theme.typography.caption,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    color: theme.colors.textMuted,
-  },
-  accountValue: {
-    fontSize: theme.typography.body,
-    fontWeight: '600',
-    color: theme.colors.text,
-  },
-  accountRole: {
-    fontSize: theme.typography.caption,
-    color: theme.colors.textMuted,
   },
 });

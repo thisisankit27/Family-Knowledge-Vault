@@ -110,6 +110,12 @@ rather than in each calling function. Both rules exist because PR-7 broke them
 and left every pre-existing family with no people — see
 `supabase/migrations/20260803120000_backfill_people_and_provision_on_access.sql`.
 
+**Scope a foreign key to the tenant where you can.** `family_relationships`
+references `family_members (id, family_id)` rather than `id` alone, so a
+relationship spanning two families is not merely refused by a policy — it
+cannot be represented. Prefer that over a check whenever the parent table
+carries the tenant column.
+
 **Writes with preconditions belong in a `SECURITY DEFINER` function, not a
 policy.** Creating a family and redeeming an invitation both have rules a
 `WITH CHECK` expression cannot state, so neither `families` nor
@@ -133,7 +139,8 @@ app/                 Routes (Expo Router — the file tree IS the navigation)
   (app)/             Signed-in screens
     (tabs)/          The five-slot tab bar
       index.tsx      Dashboard
-      family/        Nested stack: list, add a person, edit a person
+      family/        Nested stack: list, add a person, person detail,
+                     edit details, add a relationship
       documents.tsx
       memories.tsx
       more.tsx       The eight domains without a tab, plus the account
@@ -153,6 +160,7 @@ src/
     family.ts        Family creation, lookup, and the caller's role
     invitation.ts    Invite codes and redemption
     member.ts        The people in a family, with or without accounts
+    relationship.ts  How those people are connected
     connection.ts    Supabase connectivity check
   theme.ts           Design tokens from docs/10-ui-ux-design.md
 supabase/
