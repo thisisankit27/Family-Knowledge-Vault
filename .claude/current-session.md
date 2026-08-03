@@ -637,4 +637,48 @@ Photos (needs Storage — Phase 3), contact fields, notes, deleting a person, an
 
 ## Next action
 
-**PR-8 — Family Relationships** (renamed from "Family Tree"; the visual tree stays deferred to Phase 6+). Composite foreign keys `(member_id, family_id)` are ready — `family_members` carries the required unique `(id, family_id)`.
+PR-8 followed. See below.
+
+---
+---
+
+# PR-8 Complete — Family Relationships (2026-08-03)
+
+**Status: built, migration applied, 210 CI tests and 60 RLS tests passing, verified on a physical phone.**
+
+**Renamed from "Family Tree"** in the roadmap. The visual tree stays deferred to Phase 6+, and shipping something called a family tree that draws no tree would contradict the honesty standard published on the landing page.
+
+## What shipped
+
+- **`20260803150000_create_family_relationships.sql`** — the table, the reciprocal-parent trigger, `add_family_relationship`, policies and grants.
+- **`src/services/relationship.ts`** + 38 unit tests; **`src/services/relationship.rls.test.ts`** (15 RLS tests, including the PR-7 invariant test).
+- **`app/(app)/(tabs)/family/[memberId]/`** is now a directory: `index.tsx` (detail), `edit.tsx` (the old form), `relationship.tsx` (add).
+
+## The two properties that make this table correct
+
+**Cross-family links are structurally impossible.** The foreign keys reference `(member_id, family_id)` rather than `member_id` alone, so a relationship spanning two families cannot be inserted at all — not "is caught by a policy", *cannot exist*. This is why PR-7 had to add the unique `(id, family_id)` on `family_members`.
+
+**Symmetric pairs are stored once.** `spouse_of` and `sibling_of` are canonicalised with the lower id first, so (A,B) and (B,A) cannot both exist and "are they married?" is one lookup. **The ordering happens inside the database function, never in the client** — a unit test asserts the service does *not* sort, because two implementations of the same rule eventually disagree and duplicates appear.
+
+## Three stored types, four UI choices
+
+`parent_of`, `spouse_of`, `sibling_of`. Grandparent, cousin, aunt and in-law are all derivable; enumerating relationship names is a list that grows forever and still misses cases.
+
+**Added beyond the plan:** the screen offers **four** choices over those three types. Building it made the gap obvious — with only "Parent of", standing on your grandmother's page you could never say "Nani is the *child* of X" without reasoning backwards about arrow direction, which is how data gets entered wrong. "Child of" swaps the arguments and produces the identical row. `resolveRelationshipArguments` is the only place direction is decided, and a test asserts both phrasings converge.
+
+## Deliberate gaps
+
+- **Derived relationships are not computed.** Nani's page reads "Sunita — Child", never "Ankit — grandchild". Ships with the tree view.
+- **Longer cycles (A→B→C→A) are not prevented.** Only direct reciprocal parenthood is. Detection needs a recursive walk on every insert, and a looping tree is a data-entry mistake rather than an attack.
+- **No relationship metadata** (marriage dates, adoption status).
+- **No soft delete** — unlike people, a relationship carries no records and is trivially re-created.
+
+## The PR-7 promise, delivered
+
+`relationship.rls.test.ts` → `data invariants` asserts **every account with access has a person row**. Nothing in the suite asserted it before, and it is the only kind of test that would have caught PR-7's backfill defect. Add an equivalent whenever a later phase introduces a table that existing families need rows in.
+
+## Next action
+
+**PR-9a — Roles & Permission Matrix.** Widen `family_users.role` to `owner | admin | member | guest`, write the matrix into `docs/`, add the last-owner guard, and **record the record-visibility decision that blocks Phase 3**.
+
+The mechanism is already in place: every policy calls an intent helper (`has_family_access`, `can_manage_family`, `can_manage_members`, `can_edit_people`), so PR-9a edits four function bodies and **zero policies**. The draft matrix is in the Phase 2 planning checkpoint above.
