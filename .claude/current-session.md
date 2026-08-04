@@ -1,14 +1,22 @@
 # Family Knowledge Vault — Planning Session State
 
-**Last updated:** 2026-07-28 (Checkpoint 2)
+**Last updated:** 2026-08-04 (PR-9a Architecture Review)
 
-**Status:** Planning complete for Phase 1. Stack locked in. No application code written yet — next real action is implementing PR-1 whenever the user says "start PR 1."
+**Status:** Phase 1 shipped. Phase 2 is three PRs in — PR-7 and PR-8 built and merged/open, PR-9a
+fully specified and not yet started. 210 CI tests, 60 RLS tests, six migrations applied to the live
+Supabase project.
 
 ---
 
 ## How to use this file
 
-Read `CLAUDE.md` first, then this file, before re-reading `docs/*` or re-deriving anything. This file is the continuation point — don't re-derive the reasoning below from scratch. Checkpoint 1 (below) is the critical-review history; Checkpoint 2 (further below) is the current state and next action.
+Read `CLAUDE.md` first, then this file, before re-reading `docs/*` or re-deriving anything. This file is the continuation point — don't re-derive the reasoning below from scratch.
+
+**Sections are append-only and chronological. The last one is the current state.** Jump to the
+final checkpoint — *PR-9a Architecture Review (2026-08-04)* — for what to do next; read backwards
+from there only for the reasoning behind a specific decision. Checkpoint 1 is the original
+critical-review history and several of its open findings have since been resolved; where an early
+section and a later one disagree, **the later one is correct.**
 
 ---
 
@@ -67,6 +75,13 @@ Roughly in priority order:
 8. **Terminology drift across three "Timeline" concepts.** "Family Timeline" (life events/milestones), "Medical Timeline" (FR-021), and "Memory Timeline" (UR-021) are used as if distinct, but Information Architecture's Timeline domain folds Memories, Birthdays, and Life Events together while Medical keeps a separate timeline. Unclear whether this is one filterable UI component or genuinely separate features. Needs clarifying before UI/IA work is finalized.
 9. **Minor documentation drift:** `05-user-stories.md`'s "Next Document" pointer says `06-user-flows.md`, but the actual next file is `06-information-architecture.md` — no user-flows doc exists in `docs/`. Harmless, worth a one-line fix eventually.
 10. **Vision's monetization "Free = one family" vs. joint-family reality.** Low priority. The whole product philosophy centers on joint/multi-generational families sharing one workspace (fine under free tier), but a user belonging to *two* families (their own + their spouse's parents') may hit the "one family" free-tier limit awkwardly. Flag for the monetization pass, not blocking now.
+
+> **Status update, 2026-08-04.** **#3 is closed** and **#1 is answered** — both by
+> `docs/15-permission-matrix.md`, written during the PR-9a review (see the final checkpoint).
+> Privacy within the family turned out not to need a finer role model at all: it needs a
+> per-record `visibility` column, because role and visibility are two axes and #1 conflated them.
+> **#2 (emergency access) is narrowed** — decided that it is *not* a role, still undesigned, still
+> Phase 10. #4, #5, #6, #7, #8, #10 remain open. #9 is cosmetic and still unfixed.
 
 ---
 
@@ -530,6 +545,12 @@ Every record table from Phase 3 points at the person, so this is fixed now, whil
 
 PR-9a edits four function bodies and **zero policies**. This is why the roadmap order survives; without it PR-9a would have to come first, opening the phase with a backend-only stream and breaking the vertical-slice rule.
 
+> **Corrected 2026-08-04.** "Zero policies" is wrong. PR-9a **removes two** — the UPDATE and DELETE
+> policies on `family_users` — and replaces them with a definer function, because widening
+> `can_manage_members` to include Admin would otherwise let an Admin promote themselves to Owner.
+> Nine of the eleven policies are untouched and the mechanism did its job, but the number was too
+> strong. See the PR-9a Architecture Review checkpoint at the end of this file.
+
 **PR-7 must therefore also migrate the eight existing policies** (on `families`, `family_users`, `family_invitations`) off `is_family_member` / `is_family_owner` and onto the new helpers, then drop the old two. Postgres will refuse to drop a function a policy depends on, so the order inside the migration matters.
 
 ## PR order and one-line scope
@@ -681,4 +702,249 @@ PR-8 followed. See below.
 
 **PR-9a — Roles & Permission Matrix.** Widen `family_users.role` to `owner | admin | member | guest`, write the matrix into `docs/`, add the last-owner guard, and **record the record-visibility decision that blocks Phase 3**.
 
-The mechanism is already in place: every policy calls an intent helper (`has_family_access`, `can_manage_family`, `can_manage_members`, `can_edit_people`), so PR-9a edits four function bodies and **zero policies**. The draft matrix is in the Phase 2 planning checkpoint above.
+PR-9a was then reviewed in depth before implementation. **Read the checkpoint below instead of
+this paragraph** — the review found that PR-9a cannot be a simple enum change, and the draft matrix
+in the Phase 2 checkpoint has been superseded by `docs/15-permission-matrix.md`.
+
+---
+---
+
+# PR-9a Architecture Review — Roles, Permissions & Visibility (2026-08-04)
+
+**Status: review and planning only. No application code, no migration, no schema change. PR-9a is
+fully specified and has not been started.** The only changes on disk are documentation.
+
+## Read these before writing a line of PR-9a
+
+1. **`docs/15-permission-matrix.md`** — created this session. Authoritative for the role model, the
+   permission matrix, the last-owner guarantee, and the record visibility contract. Where it and
+   any earlier document disagree, it wins.
+2. **`docs/14-pr-execution-plan.md` §7.1** — what the review changed about the *plan*.
+3. This checkpoint — scope, cut lines, and next steps.
+
+## Why the review happened
+
+The user asked for one architecture review before PR-9a, limited to decisions that are hard to
+change later: the four-role model, the permission matrix, the last-owner guard, and record
+visibility. Everything from Phase 3 onward is governed by this model, so the cost of getting it
+wrong is a migration on every record table.
+
+The review paid for itself: it found **two privilege-escalation holes that the PR-9a widening
+itself creates**.
+
+## The governing principle (the single most important idea here)
+
+> **A role answers "what may you do *to* the family." Visibility answers "what may you see
+> *inside* it."**
+
+Two axes, never collapsed into one. The temptation is to keep adding roles until each answers a
+privacy question — a Child role, a Restricted Member role, an Emergency role. That ends with a
+dozen roles, none quite right.
+
+It is the wrong axis *for this product specifically*: a family is four to fifteen people who mostly
+trust each other. They do not need a finer capability grid; they need one medical record hidden
+from a brother-in-law. That is a property of the record, not of the reader.
+
+## Decisions finalised, and why
+
+**1. Four roles — Owner, Admin, Member, Guest. No fifth.**
+Emergency Contact (Persona 6) must **never** be a role: it is time-bounded, may belong to someone
+with no account at all (an ER doctor), and an `'emergency'` value would inherit `has_family_access`
+— i.e. every document in the family. It becomes a separate grant table with `expires_at` in Phase
+10. Digital Legacy (Phase 11) is cryptographic; roles cannot govern content the server cannot read.
+A teenager (Persona 5) is a **Member** whose constraint is visibility, not role.
+
+Guest was challenged hardest — it has no persona and FR-008 says roles "*may* include" it. Kept
+anyway, because without a read-only role the first request for limited access invents one later,
+and every helper written in the meantime has already implicitly decided what it can do.
+
+**2. Owners are plural.** A couple co-owning is normal and already reachable via an owner
+invitation. This is why the last-owner guarantee is a count check, not a transfer-only model.
+
+**3. `text` + `check`, not a Postgres `enum`.** `ALTER TYPE … ADD VALUE` cannot be used in the
+transaction that adds it, removing a value is near-impossible, and an enum's implicit ordering
+invites the `role >= 'member'` comparison that decision 4 forbids.
+
+**4. Every helper body is an allow-list, never a deny-list.** `role in ('owner','admin')`, never
+`role <> 'guest'`. A deny-list means every role invented in a later phase silently inherits every
+permission written before it existed — the single most likely way this model fails.
+`has_family_access` is the one deliberate exception: it is role-blind because it answers "are you
+inside the tenant boundary", which all four roles are.
+
+**5. Three new helpers ship in PR-9a** — `can_read_records`, `can_write_records`,
+`can_delete_records` — so Phase 3's first PR does zero permission design and cannot inline a role
+check into a policy. They are testable by direct call before any record table exists.
+
+**6. Two security holes, both fixed in PR-9a** (full detail: `docs/15-permission-matrix.md` §6):
+
+- **An Admin could promote themselves to Owner.** The PR-5 grant of `select, update, delete`
+  followed the rename onto `family_users`, and both write policies are gated only by
+  `can_manage_members(family_id)` — pinning neither the target row nor the new value. Widen that
+  helper and `update family_users set role='owner' where user_id = :self` succeeds, as does
+  `delete … where role='owner'`. **Fix: `family_users` becomes fully write-closed** (no INSERT,
+  UPDATE or DELETE policy; UPDATE/DELETE revoked) with `set_family_role()` as the only writer. This
+  is the third instance of the rule the project already knows — *writes with preconditions belong
+  in a definer function, not a policy.*
+- **An Admin could mint an Owner invitation.** `create_invitation` checks *who may invite* and
+  *what role may be invited* as two unrelated conditions. **Fix: cap the invited role by the
+  inviter's rank** — Owner may invite any role, Admin may invite Member or Guest only.
+
+Neither is a defect in shipped behaviour; both go live the moment `can_manage_members` includes
+`'admin'`, which is why they must ship in the same PR as the widening.
+
+**7. The last-owner guarantee needs a row lock — a trigger alone cannot provide it.**
+Under READ COMMITTED, two owners demoting each other concurrently both read `count(*) = 2` (neither
+sees the other's uncommitted change), both pass, both commit, zero owners. **A trigger runs in the
+same transaction on the same snapshot and is equally blind.** Three layers:
+(1) `select 1 from public.families where id = target for update` first in every function that can
+change the owner count — the same technique `redeem_invitation` already uses;
+(2) the check after the write, inside the function, so the message is a sentence;
+(3) a backstop trigger for the `auth.users` cascade path, which goes through no function.
+
+**The trigger's cascade guard is the detail that costs an hour:** it must skip when the family row
+is already gone (`if exists (select 1 from public.families where id = coalesce(new.family_id,
+old.family_id))`), or deleting a family cascade-deletes its access rows, the trigger sees zero
+owners, and **family deletion breaks.**
+
+**8. The record visibility reframing.** The Phase 2 checkpoint proposed
+`visibility in ('family','restricted')` on every record table. The correction:
+
+> Adding a visibility value later is a trivial `alter table`. Rewriting every record policy that
+> spelled out `visibility = 'family' or …` is not.
+
+So what is frozen before Phase 3 is **the columns every record table carries** and **the one
+function every record policy calls** — not the vocabulary. With a single `can_see_record()`
+resolver, Phase 10's Advanced Permissions adds a `shared` value by editing one function body and
+zero tables. This is the intent-helper lesson applied a second time.
+
+`created_by` is the column that genuinely cannot be added later — there is no way to backfill who
+created an existing row. "restricted" was renamed to `private`: both `family` and `private` are
+words a user can be shown, and "restricted" never says restricted *to whom*.
+
+**9. The matrix ships as a test fixture, not only as prose.** One data structure in
+`permissions.rls.test.ts` mirroring the doc; four role-holders × seven helpers = 28 assertions. A
+permission matrix that lives only in Markdown is wrong within two phases.
+
+## The two decisions the user made explicitly
+
+**`private` means private — no role reads it, not Owner, not Admin.** Reasoning: it is the only
+reading that makes the word true (the landing page now carries an honesty standard); it is the only
+option that serves Persona 5, the teenager whose parent holds Admin — precisely Checkpoint 1's
+finding #1; the failure mode is data unreachable rather than data leaked, which is the safe
+direction; recovery paths already exist in the roadmap as *designed and auditable* features
+(Emergency Mode, Phase 10; Digital Legacy, Phase 11); and it is reversible in one line of one
+function if the product later needs owner recovery.
+
+**PR-9a absorbs the record-visibility groundwork at ~2h40, over the 2h cap.** The alternative was
+deferring it into Phase 3, putting permission design on the critical path of a stream already
+building an upload flow.
+
+## Still unresolved, and why each stays open
+
+| Open item | Why it is still open |
+|---|---|
+| **Per-record ACLs** — "share this with Mum and Dad specifically" | No user story yet that the two-value model fails. §8.1 of the matrix makes it a one-function edit whenever one appears. Scheduled: Phase 10, *Advanced Permissions*. |
+| **Emergency access for a non-member caregiver** (Checkpoint 1 #2) | Needs a real design — token? QR? expiry length? — that is Phase 10's whole job. Decided *now* only that it is **not** a role. |
+| **Cross-family sharing** (Checkpoint 1 #4) | `docs/08` §22 asserts "unless explicitly shared" with no mechanism. Deliberately untouched: designing it before a real use case blocks on it would be guessing. |
+| **Column-level privacy for Guests** | `family_members`' SELECT policy is `has_family_access`, so a Guest reads `date_of_birth` and `blood_group` straight from PostgREST. Masking them in `list_family_members` would be theatre — the table is readable directly. Resolves structurally in Phase 5, where blood group arguably belongs to the medical record rather than the person row. Recorded as a **known gap**, not a fix. |
+| **DPDP / compliance posture** (Checkpoint 1 #5) | Untouched. Still belongs to the Release Gate discussion. |
+| **Whether Medical should default to `private`** | Deferred to Phase 5 on purpose: "Mum's medications" is exactly what a household needs at 2am, and the column allows the default to change per table with no model change. |
+
+## What PR-9a implements
+
+**Migration — `supabase/migrations/<ts>_roles_and_permission_matrix.sql`**
+
+1. Widen both role check constraints to `('owner','admin','member','guest')`. **Gotcha:**
+   `alter table … rename` does *not* rename constraints, so `family_users` still carries
+   `family_members_role_check` from PR-5. Confirm with `\d family_users`, and **do not use
+   `drop constraint if exists`** — a silent no-op leaves the two-value constraint in place and every
+   new role is rejected at runtime, on device. `family_invitations_role_check` needs the same
+   widening. No backfill: both existing values stay legal.
+2. `role_rank(text) → int` — `immutable`, `else -1` so unknown roles fail closed. Comment must say
+   it compares **actors**, never permissions; `role_rank(x) >= 1` is a deny-list in disguise.
+3. `create or replace` the four helpers as allow-lists (`has_family_access` unchanged); add
+   `can_read_records`, `can_write_records`, `can_delete_records`.
+4. `can_see_record(uuid, text, uuid, uuid)` — the visibility resolver, unknown value → `false`.
+5. **Hole 1:** drop `"Managers can change roles"` and `"Managers can remove access"`;
+   `revoke update, delete on public.family_users from authenticated`; add
+   `set_family_role(target_family, target_user, new_role)` — lock the family row `for update`,
+   require `can_manage_family`, validate the role, refuse acting on an equal-or-higher rank, update,
+   assert an owner still exists.
+6. **Hole 2:** `create or replace create_invitation` with the rank cap and a reworded error.
+7. Last-owner backstop trigger **with the cascade guard**.
+8. Pin `families.created_by` with a `before update` trigger (PR-5's explicitly deferred item).
+9. Grants for every new function. The RLS suite is the only thing that catches a missing one.
+
+**Application layer**
+
+| File | Change |
+|---|---|
+| `src/services/family.ts` | `FamilyRole` → four values; `ROLE_LABELS`; client-side predicates for UI gating only |
+| `src/services/role.ts` *(new)* | `setRole`, `describeRoleError`, gateway — mirroring `member.ts` |
+| `src/services/invitation.ts` | invitable roles derived from the caller's role |
+| `app/(app)/(tabs)/family/index.tsx` | role badge on each person who has an account |
+| `app/(app)/(tabs)/family/[memberId]/index.tsx` | replace the hard-coded `role === 'owner' ? 'Owner' : 'Member'` (line 122) with the label map; add "Change role" |
+| `app/(app)/(tabs)/family/[memberId]/role.tsx` *(new)* | change-role modal, registered in `family/_layout.tsx` |
+
+Reuse `Button`, `Screen`, and the choice-chip pattern from `[memberId]/relationship.tsx`.
+
+**Tests**
+
+Unit (`role.test.ts`): label map, rank ordering, invitable-role derivation, error wording, gateway
+shape.
+
+RLS (`permissions.rls.test.ts`, accounts `rls-role-{owner,admin,member,guest,outsider}@example.com`
+— every suite uses its own prefix, and fresh accounts sidestep the "already in a family" rule):
+
+- **the matrix as data** — 4 roles × 7 helpers = 28 assertions
+- `can_see_record` — `family` visible to Member not Guest; `private` invisible to **Owner and
+  Admin**, visible to author, visible to subject; unknown value → false
+- **Hole 1** — an Admin's direct `update … set role='owner'` and `delete … where role='owner'` each
+  affect zero rows, *and* the victim's own session confirms the row is untouched
+- **Hole 2** — an Admin creating an `owner` invitation is refused; a `member` one succeeds
+- **Last owner** — self-demotion refused, and **the concurrent race**: two owners, `Promise.all`,
+  exactly one succeeds
+- **Family deletion still works** with the backstop trigger installed — this is the test that fails
+  if the cascade guard is wrong
+- `created_by` cannot be rewritten by an owner
+
+**Documentation:** update `docs/15-permission-matrix.md` if implementation contradicts it, add a
+PR-9a checkpoint here, and add the write-closed-`family_users` rule and the record contract to
+`README.md` **only once they exist in code**.
+
+## Cut lines, in order
+
+1. The matrix **prose** in the doc (keep the table and the test).
+2. The role badge on the people list (keep it on the detail screen).
+3. `can_read_records` / `can_write_records` / `can_delete_records` — **if cut, PR-11 must add them
+   rather than inline a role check in a policy.**
+
+**Never cut:** the two escalation fixes, the family-row lock, the trigger's cascade guard, or
+`created_by` on the record contract.
+
+## Next steps, in priority order
+
+1. **Merge PR #13** (PR-8, Family Relationships) — open with all checks green at
+   https://github.com/thisisankit27/Family-Knowledge-Vault/pull/13. PR-9a branches from `master`
+   after it lands.
+2. **Merge the documentation PR** this session raises (see the branch note below).
+3. **Implement PR-9a** exactly as scoped above. Start with the migration, then the RLS tests, then
+   the UI — the tests are what prove the two holes are actually closed.
+4. **PR-9b — Membership Lifecycle**: remove a member, leave a family, transfer ownership. Every one
+   of those changes the owner count, so all three take the family-row lock. Removal deletes only the
+   `family_users` row and **leaves `family_members.user_id` intact**, so a rejoining member is
+   matched rather than duplicated.
+5. **PR-10 — Activity Feed.** Its triggers must target the renamed tables, and **feed entries
+   referencing a record must inherit that record's visibility** — a row reading "Ankit added
+   *Therapy notes*" leaks a private record through its title.
+6. **End of Phase 2: update the landing page Progress section** per the `CLAUDE.md` checklist —
+   stats, "What works today", "What does not work yet" (source it from the *Open items* and
+   *Deliberate gaps* sections of this file), and the phase list.
+7. **Release Gate** before any external tester: password reset (PR-3b), email verification,
+   production email provider.
+
+## Branch note
+
+The review produced documentation only. It is committed on **`pr-9a-planning`**, branched from
+`pr-8-family-relationships` so it does not wait on PR #13. If #13 merges first, this branch rebases
+onto `master` cleanly — it touches no file PR-8 touched except `.claude/current-session.md`.
