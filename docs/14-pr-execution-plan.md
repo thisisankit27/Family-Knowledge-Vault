@@ -218,7 +218,7 @@ All estimates assume the 2-hour/day cadence and the testing split in §3.3. "Spl
 
 | Phase | PRs | Est. each | Adjustment notes |
 |---|---|---|---|
-| 2 — Meet the Family (7–10) | Family Profiles, Family Tree, Roles & Permissions, Activity Feed | 2h, except Family Tree | Family Tree as a real interactive graph is too big for 2h on mobile — **split**: PR-8 ships relationships data model + simple list view; a visual tree graph becomes a stretch/polish item, pushed to Phase 6+. Roles & Permissions is where the Checkpoint 1 "no permission matrix" open risk gets resolved as a real deliverable. **It also owns removing a member and leaving a family** — PR-5 shipped the owner-only DELETE policy on `family_members` with a passing RLS test, but no interface, so the capability exists and is unreachable. |
+| 2 — Meet the Family (7–10) | Family Profiles, Family Relationships, Roles & Matrix, Membership Lifecycle, Activity Feed | 2h, except PR-9a | **Five PRs, not four** — see §7.1. PR-8 was renamed from "Family Tree": it ships the relationships data model + list view, and the visual graph is pushed to Phase 6+, because shipping a "Family Tree" that draws no tree contradicts the honesty standard on the landing page. PR-9 was **split into 9a (Roles & Matrix) and 9b (Membership Lifecycle)** at ~3h30 combined. PR-9a is where the Checkpoint 1 "no permission matrix" risk is resolved as a real deliverable — `docs/15-permission-matrix.md`. 9b owns removing a member and leaving a family: PR-5 shipped the owner-only DELETE policy with a passing RLS test and no interface, so the capability exists and is unreachable. |
 | 3 — Preserve What Matters (11–15) | Document Library, Categories, Viewer, Upload, Sharing | 2h, viewer maybe 2.5h | Upload via Expo ImagePicker/DocumentPicker + Supabase Storage — straightforward. PDF viewer needs a native lib (react-native-pdf); budget slightly over on that one PR only. |
 | 4 — Family Memories (16–20) | Memories, Albums, Stories, Voice Memories, Memory Timeline | 2h | Voice via Expo AV — natural fit. Reuses the upload pattern from Phase 3. |
 | 5 — Family Health (21–25) | Medical Dashboard, Reports, Doctors, Medicines, Vaccinations | 2h | Reuses the Documents CRUD pattern almost directly — low risk, likely the fastest phase. |
@@ -229,6 +229,39 @@ All estimates assume the 2-hour/day cadence and the testing split in §3.3. "Spl
 | 10 — Trust & Security (46–50) | Security Center, Audit History, Backup & Restore, Emergency Mode, Advanced Permissions | 2h, Emergency Mode may need 2 PRs | Emergency Mode is where the Checkpoint 1 "non-member caregiver access" open risk must finally be resolved (design + build together). Backup & Restore is limited by the free tier (no PITR) — document the limitation rather than solving it here. |
 | 11 — Legacy (51–55) | Digital Legacy, Letters, Life Instructions, Story Generator, Yearly Review | 2h, Digital Legacy split into 2 | Digital Legacy needs true client-side end-to-end encryption (per the Checkpoint 1 decision) — likely PR-51a (encryption infra) + PR-51b (UI), the most technically involved pair in the whole roadmap. Story Generator is a Phase-9-style paid-API PR. |
 | 12 — Premium (56–60) | Premium Dashboard, Advanced AI, Storage Management, Analytics, Production Readiness | 2h | Storage Management is explicitly the checkpoint to revisit the free-tier ceiling and decide on upgrading. |
+
+## 7.1 What the pre-PR-9a review changed (2026-08-04)
+
+Before implementing PR-9a, the four decisions that are expensive to reverse — the role model, the
+permission matrix, the last-owner guard and the record visibility model — were reviewed against
+the whole roadmap rather than against Phase 2 alone. The full result is
+**`docs/15-permission-matrix.md`**, which is authoritative from PR-9a onward. Three things about
+the *plan* changed and belong here.
+
+**PR-9a cannot be a simple enum change, because widening the role model opens two holes.** Both are
+latent in the schema today and go live the moment `can_manage_members` includes `'admin'`:
+
+- The UPDATE and DELETE policies on `family_users` are gated only by `can_manage_members(family_id)`
+  and pin neither the target row nor the new value, so an Admin could `set role = 'owner'` on
+  themselves, or delete every owner.
+- `create_invitation` checks *who may invite* and *what role may be invited* as two unrelated
+  conditions, so an Admin could mint an owner-role code and redeem it on a second account.
+
+Neither is a defect in shipped behaviour, and neither can be deferred: the fix has to land in the
+same PR as the widening or the widening ships a privilege-escalation path. Details and reasoning:
+`docs/15-permission-matrix.md` §6.
+
+**PR-9a is ~2h40, over the cap, and that was accepted deliberately.** The alternative was to defer
+the record-visibility groundwork to Phase 3, which would put permission design on the critical path
+of a stream that is already building an upload flow. The four record helpers cost ~20 minutes and
+are testable by direct call before any record table exists. Cut lines are recorded in the PR-9a
+checkpoint in `.claude/current-session.md`; **none of the security items are cuttable.**
+
+**The "zero policies" claim in the Phase 2 planning checkpoint was too strong.** It said PR-9a would
+edit four function bodies and no policies. It removes two and replaces them with a definer
+function. The intent-helper mechanism still did its job — nine of eleven policies are untouched, and
+the whole record layer in Phase 3 inherits it — but the number was wrong and is corrected here
+rather than quietly.
 
 ---
 
