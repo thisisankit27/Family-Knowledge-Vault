@@ -175,6 +175,12 @@ Ownership determines:
 - Sharing
 - Audit history
 
+> **Refined 2026-08-04.** Ownership determines these for the *family* — it is the tenant boundary.
+> It does **not** determine visibility *within* a family: a record's visibility is an explicit
+> column resolved by one function, not an implication of who owns it. Likewise, `Role` and
+> `Permission` in §4 are business concepts, not tables — permissions are function bodies. Both are
+> specified in `docs/15-permission-matrix.md`, which is authoritative on this subject.
+
 ---
 
 # 7. Document Model

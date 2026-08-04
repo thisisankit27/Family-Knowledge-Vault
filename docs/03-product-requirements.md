@@ -101,6 +101,12 @@ Supported roles may include:
 - Member
 - Guest
 
+> **Settled 2026-08-04.** These four are the model — no more, no fewer. What each may actually do
+> is defined in `docs/15-permission-matrix.md`, which is authoritative wherever it and this
+> document differ. Note in particular that an Emergency Contact (Persona 6) is **not** a role:
+> it is time-bounded and may belong to someone with no account, so it becomes a separate grant in
+> Phase 10.
+
 ---
 
 # 4.3 Family Members
