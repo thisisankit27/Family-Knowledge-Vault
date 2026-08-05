@@ -129,8 +129,19 @@ read with elevated rights.
 and `update`/`delete` are revoked from `authenticated` underneath. A policy can
 gate *who* writes but cannot pin *which row* or *what value*, and cannot hold a
 row lock — so an Admin gated only by "may manage members" could set their own
-row to `owner`. `set_family_role()` is the only writer; PR-9b adds the rest on
-the same pattern.
+row to `owner`. Three `SECURITY DEFINER` functions are its only writers:
+`set_family_role()`, `remove_family_access()` and `leave_family()`. Every one
+takes `select … from public.families where id = … for update` as its **first**
+statement, because the last-owner guarantee cannot be provided by a trigger —
+under `READ COMMITTED` a trigger sees the same blind snapshot the transaction
+does.
+
+**An authorisation rule is rarely a single rank comparison.** Three separate
+corrections to `docs/15-permission-matrix.md` came from assuming otherwise.
+`role_rank()` compares *actors* — "may I act on this person", "may I invite at
+this level" — and must never appear in a permission check. Removal is the
+clearest case: an Owner may remove anyone, an Admin may remove strictly below
+themselves, and no single `>` or `>=` expresses both.
 
 **Every policy calls an intent-named helper — `can_edit_people(family)` — never
 a role name.** That is why the role model widened from two values to four in

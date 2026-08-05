@@ -2,13 +2,21 @@
 
 **Project:** Family Knowledge Vault
 
-**Version:** 1.1
+**Version:** 1.2
 
-**Status:** Decided 2026-08-04, **implemented in PR-9a on 2026-08-05.** Authoritative for every
-phase from here onward. Version 1.1 folds in three corrections found while building it — the
-invitation rank cap (§4.2), the absence of a rank check in `set_family_role` (§7.1), and the
-`has_family_access` gate on `can_see_record` (§8.3). Each is marked in place rather than silently
-rewritten.
+**Status:** Decided 2026-08-04, **implemented in PR-9a (2026-08-05) and PR-9b (2026-08-06).**
+Authoritative for every phase from here onward.
+
+Two rounds of corrections, each found by building the thing the document described, each marked in
+place rather than silently rewritten:
+
+- **v1.1, PR-9a** — the invitation rank cap (§4.2), the absence of a rank check in
+  `set_family_role` (§7.1), and the `has_family_access` gate on `can_see_record` (§8.3).
+- **v1.2, PR-9b** — the rank rule on removal (§4.2) and transfer not being one locked function
+  (§7.1 path 5).
+
+Three of the five were the *same mistake*: assuming a single `role_rank` comparison expresses an
+authorisation rule. It does not, and §5.2 already said so.
 
 ---
 
@@ -120,7 +128,18 @@ and no Admin may mint an Owner code.** See §6.2.
 > and is behaviour PR-6 already shipped. `<=` is the comparison that actually closes §6.2; an Admin
 > inviting an Admin is lateral, not an escalation.
 
-**Rank on removal** — an Admin may not remove an Owner or another Admin.
+**Rank on removal** — an Owner may remove anyone; an **Admin may remove strictly below
+themselves**, so neither an Owner nor another Admin.
+
+> **Corrected 2026-08-06, during PR-9b.** This originally read only "an Admin may not remove an
+> Owner or another Admin", left the Owner-on-Owner case unstated, and gave the helper as
+> `can_manage_members` **+ rank** — implying one comparison. **No single comparison is the rule**,
+> and this is the same trap that caught `set_family_role` in PR-9a:
+> `rank(actor) > rank(target)` blocks an Owner removing a co-owner, which is the case removal
+> exists for; `rank(actor) >= rank(target)` lets an Admin remove another Admin, which this row
+> forbids. It is two clauses — `can_manage_family(actor)` **or**
+> (`can_manage_members(actor)` and `role_rank(target) < role_rank(actor)`). What stops an Owner
+> emptying the family is §7, not a hierarchy.
 
 **\*** An Owner may leave only if another Owner remains. See §7.
 
@@ -242,6 +261,7 @@ Self-promotion, and decapitation of the family in one statement.
 **Decision: `family_users` becomes fully write-closed** — no INSERT, UPDATE or DELETE policy, and
 UPDATE/DELETE revoked from `authenticated`. Every change goes through a `SECURITY DEFINER`
 function: `set_family_role()` in PR-9a, `remove_family_access()` and `leave_family()` in PR-9b.
+**All three shipped**; all three take the family-row lock as their first statement.
 
 **Shipped in PR-9a**, `20260805090000_roles_and_permission_matrix.sql` §5, asserted by
 `permissions.rls.test.ts` → *hole 1*, which checks both the direct `update` and the direct `delete`
@@ -288,9 +308,17 @@ small `before update` trigger.
 | 2 | The last owner's access is removed, or they leave *(PR-9b)* | check inside the function |
 | 3 | **Two owners demote each other concurrently** | **the row lock — nothing else** |
 | 4 | An owner's `auth.users` row is deleted → cascade on `family_users` | backstop trigger |
-| 5 | Transfer implemented as demote-then-promote | one locked function; promote first |
+| 5 | Transfer implemented as demote-then-promote | promote first — see the note below |
 | 6 | An Admin demotes an Owner | `can_manage_family` — changing a role is Owner-only |
 | 7 | The family is deleted → its access rows cascade to zero owners | **must not** trip the guard |
+
+> **Corrected 2026-08-06, during PR-9b.** Path 5 originally said "one locked function". Transfer
+> is **not** a database primitive and did not get one. Owners are plural, so the state between the
+> two role changes is *two owners* — which the product already supports — and a transfer that stops
+> halfway therefore leaves nothing broken and needs no transaction. It ships as
+> `transferOwnership` in `src/services/access.ts`, two `set_family_role` calls, which is the one
+> place the promote-before-demote order is written down. What it does owe the user is an honest
+> report when only the second call fails: "they are now an owner, and so are you."
 
 > **Corrected 2026-08-05, during PR-9a.** Path 6 originally said "rank check". `set_family_role`
 > has **no rank comparison at all**, deliberately. It is gated on `can_manage_family`, so every
@@ -470,6 +498,8 @@ feed is the first place visibility can escape the table it protects.
 | Emergency access for a non-member caregiver | Phase 10, *Emergency Mode*. Checkpoint 1 finding #2. Separate time-boxed grant table, never a role. |
 | Cross-family sharing | Still open — Checkpoint 1 finding #4. `docs/08` §22 asserts "unless explicitly shared" with no mechanism designed. Revisit when it first blocks a real use case. |
 | Custom / user-defined roles | Not planned. §2 explains why the axis is wrong for this product. |
+| **Soft-deleting a person** | **Reserved, not forgotten.** `family_members.deleted_at` and the `deleted_at is null` filter in its SELECT policy have existed since PR-7 with nothing able to set the column. Deliberately left that way in PR-9b: revoking an *account's access* and removing a *person* from the family are different domain operations, and coupling them would mean "remove" meant two things. Belongs to a future **Person Lifecycle** PR, which also has to decide what happens to that person's relationships and, from Phase 3, their records. |
+| Recovering a deleted family | Not planned. `families` has no `deleted_at`; deletion is a hard cascade and the delete screen says so in those words. |
 | Column-level privacy for Guests | **Known gap.** `family_members`' SELECT policy is `has_family_access`, so a Guest reads `date_of_birth` and `blood_group` straight from PostgREST. Masking them in `list_family_members` would be theatre — the table is readable directly. Resolves structurally in Phase 5, where blood group arguably belongs to the medical record rather than the person row. |
 
 ---
@@ -486,9 +516,15 @@ fails.
 A permission matrix that lives only in Markdown is wrong within two phases. This one cannot drift
 without breaking a test.
 
-**It earned that on the first day.** Three of this document's own claims were wrong when checked
-against a running database, and all three are marked in place above. The two that mattered were
-found by trying to write the test, not by re-reading the prose.
+**It earned that on the first day, and again on the second.** Five of this document's own claims
+were wrong when checked against a running database — three in PR-9a, two in PR-9b — and all five
+are marked in place above. Every one was found by trying to write the test, not by re-reading the
+prose.
+
+Three of the five were the same mistake, which is the useful part: reaching for a single
+`role_rank` comparison to express an authorisation rule. §5.2 already warns that `role_rank`
+compares *actors* and must never appear in a permission check, and the warning was still not
+enough on its own. If a sixth correction lands here, start at that line.
 
 ---
 

@@ -52,6 +52,7 @@ export interface FamilyGateway {
   createFamily(input: CreateFamilyInput): Promise<GatewayResult<Family>>;
   listMyFamilies(): Promise<GatewayResult<Family[]>>;
   getMyRole(familyId: string, userId: string): Promise<GatewayResult<FamilyRole>>;
+  deleteFamily(familyId: string): Promise<{ error: { message: string } | null }>;
 }
 
 export type FamilyOutcome =
@@ -86,7 +87,10 @@ export function validateFamilyName(raw: string): { message: string } | null {
 export function describeFamilyError(message: string): string {
   const normalised = message.toLowerCase();
 
-  if (normalised.includes('row-level security')) {
+  if (normalised.includes('row-level security') || normalised.includes('permission denied')) {
+    // `permission denied` is the privilege layer rather than a policy, and it
+    // became a realistic answer when PR-9a started revoking grants. Every other
+    // service already handled both; this one did not.
     return 'You do not have permission to do that.';
   }
   if (normalised.includes('not authenticated')) {
@@ -162,6 +166,26 @@ export async function getMyRole(
   return data;
 }
 
+/**
+ * Deletes the family and everything hanging off it.
+ *
+ * Confirmation belongs to the screen, not here — but note what "everything"
+ * means: `families` has no `deleted_at`, so this is a hard cascade through
+ * people, relationships and invitations, and nothing is recoverable. Any copy
+ * that suggests otherwise would be a lie.
+ *
+ * The caller must already know they want this. The name is typed out on the
+ * delete screen for that reason.
+ */
+export async function deleteFamily(
+  gateway: FamilyGateway,
+  familyId: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { error } = await gateway.deleteFamily(familyId);
+  if (error) return { ok: false, message: describeFamilyError(error.message) };
+  return { ok: true };
+}
+
 interface FamilyRow {
   id: string;
   name: string;
@@ -216,6 +240,16 @@ export function createSupabaseFamilyGateway(client: SupabaseClient): FamilyGatew
         .maybeSingle<{ role: FamilyRole }>();
 
       return { data: data?.role ?? null, error };
+    },
+
+    // A plain delete, not an RPC. Unlike removing somebody's access, the whole
+    // rule is expressible as a policy — `can_manage_family(id)`, owner-only —
+    // so a definer function would add a layer and no precondition. The policy
+    // and its grant have been in place since PR-5; PR-9b only gives them a way
+    // in. Everything else goes with it by `on delete cascade`.
+    async deleteFamily(familyId) {
+      const { error } = await client.from('families').delete().eq('id', familyId);
+      return { error };
     },
   };
 }

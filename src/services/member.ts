@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { FamilyRole, GatewayResult } from './family';
+import { ROLE_LABELS } from './role';
 
 export type { FamilyRole };
 
@@ -42,6 +43,46 @@ export interface MemberInput {
   displayName: string;
   dateOfBirth?: string | null;
   bloodGroup?: BloodGroup | null;
+}
+
+/**
+ * Having an account and having access to *this family* are different things,
+ * and there are three states rather than two.
+ *
+ * `none` is a person somebody typed in — a grandmother, a child, an ancestor —
+ * who may never sign in at all. `revoked` is somebody who had access and lost
+ * it, by leaving or by being removed in PR-9b: the account still exists, the
+ * person is still in the family, and only the grant is gone.
+ *
+ * Collapsing the two reads as "No account" for a person who plainly has one,
+ * and — worse — leaves role controls on screen that the database will refuse.
+ */
+export type MemberAccess = 'none' | 'active' | 'revoked';
+
+type AccessFields = Pick<Member, 'userId' | 'role'>;
+
+export function memberAccess(member: AccessFields): MemberAccess {
+  if (!member.userId) return 'none';
+  return member.role ? 'active' : 'revoked';
+}
+
+/** The only gate for anything that acts on somebody's role. */
+export function hasFamilyAccess(member: AccessFields): boolean {
+  return memberAccess(member) === 'active';
+}
+
+export function describeMemberAccess(member: AccessFields): string {
+  switch (memberAccess(member)) {
+    case 'none':
+      return 'No account';
+    case 'revoked':
+      // Deliberately not "Left the family" or "Removed": nothing in the schema
+      // records which one it was, and guessing would be a claim about a person.
+      // The activity feed in PR-10 is where that distinction can come from.
+      return 'No longer has access';
+    default:
+      return ROLE_LABELS[member.role!];
+  }
 }
 
 export interface MemberGateway {

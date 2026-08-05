@@ -27,11 +27,13 @@ import {
 } from '../../../../src/services/invitation';
 import {
   createSupabaseMemberGateway,
+  describeMemberAccess,
   listMembers,
   type Member,
 } from '../../../../src/services/member';
 import {
   canEditPeople,
+  canManageFamily,
   canManageMembers,
   invitableRoles,
   ROLE_LABELS,
@@ -328,6 +330,21 @@ function FamilyHome({ family }: { family: Family }) {
           />
         </View>
       )}
+
+      {/* Last thing on the screen, quiet, owner-only. Discoverable without
+          having to trigger the leave-family refusal first — but nowhere near
+          anything anyone taps by habit, and the screen it opens asks for the
+          family name to be typed out. */}
+      {canManageFamily(role) && (
+        <Pressable
+          onPress={() => router.push('/(app)/(tabs)/family/delete')}
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${family.name}`}
+          style={styles.destructive}
+        >
+          <Text style={styles.destructiveText}>Delete this family</Text>
+        </Pressable>
+      )}
     </Screen>
   );
 }
@@ -337,10 +354,10 @@ function MemberRow({ member, isYou }: { member: Member; isYou: boolean }) {
   // difference is a quiet subtitle — a person who never signs in is no less a
   // member of the family.
   //
-  // Read from the label map rather than a ternary: the ternary this replaces
-  // rendered every admin and every guest as "Member", and would have gone on
-  // doing so silently for every role a later phase adds.
-  const detail = member.role ? ROLE_LABELS[member.role] : 'No account';
+  // Three states, not two. Somebody who left still has an account, so calling
+  // them "No account" is simply untrue; the service owns that distinction so
+  // this screen and the detail screen cannot disagree about it.
+  const detail = describeMemberAccess(member);
 
   return (
     <Pressable
@@ -426,6 +443,16 @@ const styles = StyleSheet.create({
   },
   choicePressed: {
     opacity: 0.7,
+  },
+  destructive: {
+    minHeight: theme.touchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destructiveText: {
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+    color: theme.colors.error,
   },
   memberRow: {
     flexDirection: 'row',

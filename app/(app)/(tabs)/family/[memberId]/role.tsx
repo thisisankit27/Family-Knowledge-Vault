@@ -8,6 +8,7 @@ import { useAuth } from '../../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../../src/providers/FamilyProvider';
 import {
   createSupabaseMemberGateway,
+  hasFamilyAccess,
   listMembers,
   type Member,
 } from '../../../../../src/services/member';
@@ -94,12 +95,17 @@ export default function ChangeRoleScreen() {
     );
   }
 
-  if (!member?.userId) {
+  // Two different reasons there may be no role to change, and they need
+  // different sentences: nobody ever signed in as this person, or somebody did
+  // and no longer has access. Both end here rather than at a picker that saves
+  // into a refusal.
+  if (!member || !hasFamilyAccess(member)) {
     return (
       <View style={styles.centre}>
         <Text style={styles.empty}>
-          This person does not have an account in this family, so there is no
-          role to change. Invite them first.
+          {member?.userId
+            ? 'This person no longer has access to the family, so there is no role to change. Send them a new invite code first.'
+            : 'This person does not have an account in this family, so there is no role to change. Invite them first.'}
         </Text>
       </View>
     );
