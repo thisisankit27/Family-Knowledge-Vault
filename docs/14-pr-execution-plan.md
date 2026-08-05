@@ -304,6 +304,33 @@ removing a person from the family are different domain operations; coupling them
 "remove" mean two things. Recorded as *reserved* in matrix §10, against a future Person Lifecycle
 PR.
 
+## 7.4 What building PR-10 closed the phase with (2026-08-06)
+
+The activity feed is the first table to inherit the record contract, and it inherited it whole: its
+SELECT policy is a **single `can_see_record` call**, no role name appears in the migration, and the
+Guest exclusion required by §4.5 falls out of `'family'` visibility delegating to
+`can_read_records`. That is the proof PR-9a's early helpers were worth their 2h40 — Phase 3's record
+tables copy the same one-line policy.
+
+**Two findings worth carrying forward.**
+
+`now()` is *transaction* time, so every row a transaction writes shares a `created_at` and cannot be
+ordered. `create_family` writes two events and they tied, letting the feed show somebody joining a
+family that did not exist yet. `clock_timestamp()` fixes it, in a second migration rather than an
+edit to the applied one — **migration history is append-only.** Every Phase 3 trigger that logs
+alongside a record write will hit this.
+
+The **cascade guard appeared for the third time**. PR-7's backfill, PR-9a's `enforce_last_owner`,
+and now four logging triggers that would each have made family deletion fail. The question to ask of
+any trigger or migration is *what does this mean for rows that already exist, or are on their way
+out?*
+
+**End-of-phase ritual, both halves done.** The landing page Progress section had drifted a whole
+phase — 9 pull requests against a real 18, 163 tests against 453, and a gap listed as missing that
+PR-9b had shipped. And `docs/16-phase-3-brief.md` was written for Phase 3 on the `docs/15`
+precedent: it records five storage decisions that exist nowhere in the repo and four contradictions
+between existing documents, rather than leaving them to be discovered mid-stream.
+
 ---
 
 # 8. How Resumption Works
