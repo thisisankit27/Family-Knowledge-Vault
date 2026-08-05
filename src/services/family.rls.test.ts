@@ -216,14 +216,19 @@ describeRls('families RLS — one family cannot touch another', () => {
     });
 
     it('stops Alice promoting herself inside Bob’s family', async () => {
-      const { data, error } = await alice
+      // PR-9a write-closed this table: `update` is revoked from `authenticated`
+      // outright, so the refusal now arrives as a privilege error rather than
+      // as an RLS-filtered empty result. Both are refusals; the privilege one
+      // is the stronger of the two, because it does not depend on a policy
+      // expression being right. What the test actually pins is the line below —
+      // that Bob's row is untouched — and that is unchanged.
+      const { error } = await alice
         .from('family_users')
         .update({ role: 'owner' })
         .eq('family_id', bobFamilyId)
         .select('user_id');
 
-      expect(error).toBeNull();
-      expect(data).toEqual([]);
+      expect(error?.code).toBe('42501');
 
       const check = await bob
         .from('family_users')
@@ -262,14 +267,16 @@ describeRls('families RLS — one family cannot touch another', () => {
     });
 
     it('stops Alice removing Bob from his own family', async () => {
-      const { data, error } = await alice
+      // As above: `delete` on family_users is revoked from `authenticated` as
+      // of PR-9a, so this is a privilege refusal now. Removing someone's access
+      // arrives in PR-9b as a definer function with its own preconditions.
+      const { error } = await alice
         .from('family_users')
         .delete()
         .eq('family_id', bobFamilyId)
         .select('user_id');
 
-      expect(error).toBeNull();
-      expect(data).toEqual([]);
+      expect(error?.code).toBe('42501');
 
       const check = await bob
         .from('family_users')

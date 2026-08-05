@@ -33,6 +33,10 @@ export default function FamilyLayout() {
         name="[memberId]/relationship"
         options={{ title: 'Add relationship', presentation: 'modal' }}
       />
+      <Stack.Screen
+        name="[memberId]/role"
+        options={{ title: 'Change role', presentation: 'modal' }}
+      />
     </Stack>
   );
 }

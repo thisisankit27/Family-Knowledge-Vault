@@ -161,7 +161,7 @@ describeRls('invitations RLS', () => {
       });
 
       expect(error).not.toBeNull();
-      expect(error?.message).toContain('Only an owner can invite');
+      expect(error?.message).toContain('Not allowed to invite people to this family');
     });
 
     it('gives the same answer for a family that does not exist', async () => {
@@ -172,7 +172,7 @@ describeRls('invitations RLS', () => {
         invited_role: 'member',
       });
 
-      expect(error?.message).toContain('Only an owner can invite');
+      expect(error?.message).toContain('Not allowed to invite people to this family');
     });
 
     it('refuses an unknown role', async () => {
@@ -302,14 +302,14 @@ describeRls('invitations RLS', () => {
 
   describe('membership after joining', () => {
     it('does not let a plain member invite anyone', async () => {
-      // The joiner is a member, not an owner. Inviting is owner-only until
-      // PR-9 defines the real permission matrix.
+      // The joiner is a member. As of PR-9a inviting belongs to
+      // can_manage_members, which is Owner and Admin — a Member is neither.
       const { error } = await joiner.rpc('create_invitation', {
         target_family: familyId,
         invited_role: 'member',
       });
 
-      expect(error?.message).toContain('Only an owner can invite');
+      expect(error?.message).toContain('Not allowed to invite people to this family');
     });
 
     it('does not let a plain member revoke an invitation', async () => {

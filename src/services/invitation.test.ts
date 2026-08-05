@@ -105,7 +105,11 @@ describe('describeInvitationError', () => {
     ['Invalid code', "That code doesn't match an invitation."],
     ['Code already used', 'That code has already been used. Ask for a new one.'],
     ['Code expired', 'That code has expired. Ask for a new one.'],
-    ['Only an owner can invite', 'Only the family owner can invite people.'],
+    ['Not allowed to invite people to this family', 'Only an owner or an admin can invite people.'],
+    [
+      'Cannot invite someone at a higher role than your own',
+      'You cannot invite someone at a higher role than your own.',
+    ],
     ['permission denied for table family_invitations', 'You do not have permission to do that.'],
   ])('rewrites %p', (raw, expected) => {
     expect(describeInvitationError(raw)).toBe(expected);
@@ -141,17 +145,17 @@ describe('createInvitation', () => {
     });
   });
 
-  it('reports a non-owner attempt in plain language', async () => {
+  it('reports an attempt by someone who may not invite in plain language', async () => {
     const { gateway } = fakeGateway({
       createInvitation: async () => ({
         data: null,
-        error: { message: 'Only an owner can invite' },
+        error: { message: 'Not allowed to invite people to this family' },
       }),
     });
 
     expect(await createInvitation(gateway, { familyId: 'fam-1' })).toEqual({
       ok: false,
-      message: 'Only the family owner can invite people.',
+      message: 'Only an owner or an admin can invite people.',
     });
   });
 });
