@@ -1,5 +1,6 @@
 import {
   createFamily,
+  deleteFamily,
   describeFamilyError,
   getMyRole,
   listMyFamilies,
@@ -18,8 +19,12 @@ const family: Family = {
 
 /** Records what reached the database, so trimming can be asserted. */
 function fakeGateway(overrides: Partial<FamilyGateway> = {}) {
-  const calls: { method: string; name?: string }[] = [];
+  const calls: { method: string; name?: string; familyId?: string }[] = [];
   const gateway: FamilyGateway = {
+    deleteFamily: async (familyId) => {
+      calls.push({ method: 'deleteFamily', familyId });
+      return { error: null };
+    },
     createFamily: async (input) => {
       calls.push({ method: 'createFamily', ...input });
       return { data: family, error: null };
@@ -204,5 +209,33 @@ describe('getMyRole', () => {
     });
 
     expect(await getMyRole(gateway, 'fam-1', 'user-1')).toBeNull();
+  });
+});
+
+describe('deleteFamily', () => {
+  it('sends the family id', async () => {
+    const { gateway, calls } = fakeGateway();
+    await deleteFamily(gateway, 'fam-1');
+
+    expect(calls).toEqual([{ method: 'deleteFamily', familyId: 'fam-1' }]);
+  });
+
+  it('reports success', async () => {
+    const { gateway } = fakeGateway();
+    expect(await deleteFamily(gateway, 'fam-1')).toEqual({ ok: true });
+  });
+
+  it('reports a refusal in plain language rather than pretending it worked', async () => {
+    // A delete that RLS filters to zero rows reports no error, so the screen
+    // cannot treat silence as proof. What it can do is not invent success when
+    // the database does object.
+    const { gateway } = fakeGateway({
+      deleteFamily: async () => ({ error: { message: 'permission denied for table families' } }),
+    });
+
+    expect(await deleteFamily(gateway, 'fam-1')).toEqual({
+      ok: false,
+      message: 'You do not have permission to do that.',
+    });
   });
 });

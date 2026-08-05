@@ -5,9 +5,18 @@ import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View
 
 import { Button } from '../../../../../src/components/Button';
 import { getSupabase } from '../../../../../src/lib/supabase';
+import { useAuth } from '../../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../../src/providers/FamilyProvider';
 import {
+  canRemoveAccess,
+  createSupabaseAccessGateway,
+  removeAccess,
+  transferOwnership,
+} from '../../../../../src/services/access';
+import {
   createSupabaseMemberGateway,
+  describeMemberAccess,
+  hasFamilyAccess,
   listMembers,
   type Member,
 } from '../../../../../src/services/member';
@@ -30,13 +39,16 @@ import { theme } from '../../../../../src/theme';
  */
 export default function MemberDetailScreen() {
   const { memberId } = useLocalSearchParams<{ memberId: string }>();
-  const { family, role: myRole } = useFamily();
+  const { family, role: myRole, refresh } = useFamily();
+  const { session } = useAuth();
 
   const [members, setMembers] = useState<Member[]>([]);
   const [relationships, setRelationships] = useState<RelationshipView[]>([]);
   const [loading, setLoading] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [accessBusy, setAccessBusy] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!family) return;
@@ -65,6 +77,75 @@ export default function MemberDetailScreen() {
   const member = members.find((person) => person.id === memberId) ?? null;
   const nameOf = (id: string) =>
     members.find((person) => person.id === id)?.displayName ?? 'Someone';
+  const isYou = !!member?.userId && member.userId === session?.user.id;
+
+  function confirmRemoveAccess() {
+    if (!member) return;
+    Alert.alert(
+      `Remove ${member.displayName}'s access?`,
+      `They will no longer be able to sign in to this family. ${member.displayName} stays in the family, and nothing they added is deleted.`,
+      [
+        { text: 'Keep it', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => void handleRemoveAccess() },
+      ],
+    );
+  }
+
+  async function handleRemoveAccess() {
+    if (!family || !member?.userId) return;
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      const result = await removeAccess(createSupabaseAccessGateway(getSupabase()), {
+        familyId: family.id,
+        userId: member.userId,
+      });
+      if (!result.ok) {
+        setAccessError(result.message);
+        return;
+      }
+      // Back to the list: this screen's whole identity card is now stale, and
+      // the person is still there but no longer has an account to describe.
+      router.back();
+    } finally {
+      setAccessBusy(false);
+    }
+  }
+
+  function confirmTransfer() {
+    if (!member) return;
+    Alert.alert(
+      `Make ${member.displayName} the owner?`,
+      `${member.displayName} will be able to do everything you can, including deleting the family. You become an admin. Another owner can make you an owner again.`,
+      [
+        { text: 'Keep it', style: 'cancel' },
+        { text: 'Hand over', style: 'destructive', onPress: () => void handleTransfer() },
+      ],
+    );
+  }
+
+  async function handleTransfer() {
+    if (!family || !member?.userId || !session) return;
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      const result = await transferOwnership(createSupabaseAccessGateway(getSupabase()), {
+        familyId: family.id,
+        fromUserId: session.user.id,
+        toUserId: member.userId,
+      });
+      if (!result.ok) {
+        setAccessError(result.message);
+        return;
+      }
+      // Your own role gates what the rest of the app draws, so it has to be
+      // re-read before leaving this screen.
+      await refresh();
+      router.back();
+    } finally {
+      setAccessBusy(false);
+    }
+  }
 
   function confirmRemove(view: RelationshipView) {
     Alert.alert(
@@ -118,10 +199,20 @@ export default function MemberDetailScreen() {
         <View style={styles.card}>
           <Text style={styles.name}>{member.displayName}</Text>
           <Text style={styles.facts}>{describeFacts(member)}</Text>
+          {/* "Signs in as" is only true while the grant exists. Somebody who
+              left still owns that address; they just cannot reach this family
+              with it. */}
           {!!member.email && (
             <Text style={styles.account}>
-              Signs in as {member.email}
-              {member.role ? ` · ${ROLE_LABELS[member.role]}` : ''}
+              {hasFamilyAccess(member)
+                ? `Signs in as ${member.email} · ${ROLE_LABELS[member.role!]}`
+                : `${member.email} · ${describeMemberAccess(member)}`}
+            </Text>
+          )}
+          {!hasFamilyAccess(member) && !!member.userId && (
+            <Text style={styles.facts}>
+              Everything they added is still here. Send them a new invite code
+              to give them access again.
             </Text>
           )}
           {canEditPeople(myRole) && (
@@ -133,12 +224,47 @@ export default function MemberDetailScreen() {
           )}
           {/* Only for people who have an account: a role is a property of
               signing in, and most people in a family never will. */}
-          {canChangeRoles(myRole) && !!member.userId && (
+          {/* `hasFamilyAccess`, not `userId`. There is no role to change on
+              somebody who has left — set_family_role would refuse, and a button
+              that always fails is worse than no button. */}
+          {canChangeRoles(myRole) && hasFamilyAccess(member) && (
             <Button
               label="Change role"
               variant="quiet"
               onPress={() => router.push(`/(app)/(tabs)/family/${member.id}/role`)}
             />
+          )}
+
+          {/* Handing over is two role changes, and the order matters: demoting
+              yourself first is refused by the last-owner guarantee. The service
+              is the only place that order is written down. */}
+          {canChangeRoles(myRole) && hasFamilyAccess(member) && !isYou && (
+            <Button
+              label="Make owner and step down"
+              variant="quiet"
+              onPress={confirmTransfer}
+              disabled={accessBusy}
+            />
+          )}
+
+          {canRemoveAccess(myRole, member.role, isYou) && (
+            <Pressable
+              onPress={confirmRemoveAccess}
+              disabled={accessBusy}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${member.displayName}'s access`}
+              style={styles.destructive}
+            >
+              <Text style={styles.destructiveText}>
+                {accessBusy ? 'Removing…' : 'Remove access'}
+              </Text>
+            </Pressable>
+          )}
+
+          {!!accessError && (
+            <Text style={styles.error} accessibilityRole="alert">
+              {accessError}
+            </Text>
           )}
         </View>
 
@@ -266,6 +392,19 @@ const styles = StyleSheet.create({
   },
   error: {
     fontSize: theme.typography.body,
+    color: theme.colors.error,
+  },
+  // A bare pressable rather than a Button variant: this is the second
+  // destructive action in the app (after revoking an invite code) and it
+  // follows that one's shape. Two call sites do not justify a new variant.
+  destructive: {
+    minHeight: theme.touchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destructiveText: {
+    fontSize: theme.typography.body,
+    fontWeight: '600',
     color: theme.colors.error,
   },
   relationshipRow: {

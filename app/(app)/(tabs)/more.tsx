@@ -1,14 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '../../../src/components/Button';
 import { Screen } from '../../../src/components/Screen';
 import { getSupabase } from '../../../src/lib/supabase';
 import { MORE_DOMAINS, type Domain } from '../../../src/navigation/domains';
 import { useAuth } from '../../../src/providers/AuthProvider';
+import { useFamily } from '../../../src/providers/FamilyProvider';
+import { createSupabaseAccessGateway, leaveFamily } from '../../../src/services/access';
 import { signOut } from '../../../src/services/auth';
 import { checkConnection, type ConnectionStatus } from '../../../src/services/connection';
+import { canManageFamily } from '../../../src/services/role';
 import { theme } from '../../../src/theme';
 
 type Check =
@@ -28,8 +32,11 @@ type Check =
  */
 export default function MoreScreen() {
   const { session } = useAuth();
+  const { family, role, refresh } = useFamily();
   const [check, setCheck] = useState<Check>({ phase: 'checking' });
   const [signingOut, setSigningOut] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
 
   const runCheck = useCallback(async () => {
     setCheck({ phase: 'checking' });
@@ -55,6 +62,42 @@ export default function MoreScreen() {
     setSigningOut(false);
   }
 
+  function confirmLeave() {
+    if (!family) return;
+    Alert.alert(
+      `Leave ${family.name}?`,
+      "You will lose access to everything in it. You stay in the family as a person, and nothing you added is deleted — someone still in it can invite you back.",
+      [
+        { text: 'Keep it', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: () => void handleLeave() },
+      ],
+    );
+  }
+
+  async function handleLeave() {
+    if (!family) return;
+    setLeaving(true);
+    setLeaveError(null);
+    try {
+      // The sole-owner case is not pre-checked here on purpose. The owner count
+      // can change on another device between this screen rendering and the tap,
+      // and `useFamily()` does not expose it. Let the database answer, then turn
+      // its answer into the two routes out.
+      const result = await leaveFamily(createSupabaseAccessGateway(getSupabase()), {
+        familyId: family.id,
+      });
+      if (!result.ok) {
+        setLeaveError(result.message);
+        return;
+      }
+      await refresh();
+    } finally {
+      setLeaving(false);
+    }
+  }
+
+  const stuckAsSoleOwner = !!leaveError && leaveError.includes('only owner');
+
   return (
     <Screen title="More" subtitle="Everything else in your vault.">
       <View style={styles.list}>
@@ -71,6 +114,48 @@ export default function MoreScreen() {
         <Text style={styles.cardLabel}>Account</Text>
         <Text style={styles.email}>{session?.user.email ?? 'Unknown'}</Text>
         <ConnectionRow check={check} />
+
+        {!!family && (
+          <>
+            <View style={styles.divider} />
+            <Pressable
+              onPress={confirmLeave}
+              disabled={leaving}
+              accessibilityRole="button"
+              accessibilityLabel={`Leave ${family.name}`}
+              style={styles.destructive}
+            >
+              <Text style={styles.destructiveText}>
+                {leaving ? 'Leaving…' : `Leave ${family.name}`}
+              </Text>
+            </Pressable>
+
+            {!!leaveError && (
+              <Text style={styles.leaveError} accessibilityRole="alert">
+                {leaveError}
+              </Text>
+            )}
+
+            {/* The refusal is not a dead end. Both ways out of it are real
+                actions, so both are offered rather than described. */}
+            {stuckAsSoleOwner && (
+              <>
+                <Button
+                  label="Choose a new owner"
+                  variant="quiet"
+                  onPress={() => router.push('/(app)/(tabs)/family')}
+                />
+                {canManageFamily(role) && (
+                  <Button
+                    label="Delete this family instead"
+                    variant="quiet"
+                    onPress={() => router.push('/(app)/(tabs)/family/delete')}
+                  />
+                )}
+              </>
+            )}
+          </>
+        )}
       </View>
 
       <Button label="Check connection" onPress={runCheck} variant="quiet" />
@@ -204,6 +289,26 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
   statusError: {
+    color: theme.colors.error,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: theme.colors.border,
+    marginTop: theme.spacing.xs,
+  },
+  destructive: {
+    minHeight: theme.touchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destructiveText: {
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+    color: theme.colors.error,
+  },
+  leaveError: {
+    fontSize: theme.typography.body,
+    lineHeight: 24,
     color: theme.colors.error,
   },
   dot: {

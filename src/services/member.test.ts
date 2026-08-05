@@ -1,9 +1,12 @@
 import {
   addMember,
   BLOOD_GROUPS,
+  describeMemberAccess,
   describeMemberError,
+  hasFamilyAccess,
   listMembers,
   MAX_NAME_LENGTH,
+  memberAccess,
   updateMember,
   validateMemberInput,
   type Member,
@@ -275,5 +278,49 @@ describe('listMembers', () => {
     });
 
     expect(await listMembers(gateway, 'fam-1')).toEqual([]);
+  });
+});
+
+describe('a person, an account, and access are three different things', () => {
+  // The bug this replaces: someone who left the family was shown as "No
+  // account" next to someone who never had one. They are not the same person
+  // to a reader, and they are not the same row to the database.
+  const placeholder = { userId: null, role: null };
+  const active = { userId: 'user-1', role: 'admin' as const };
+  const revoked = { userId: 'user-1', role: null };
+
+  it('tells the three states apart', () => {
+    expect(memberAccess(placeholder)).toBe('none');
+    expect(memberAccess(active)).toBe('active');
+    expect(memberAccess(revoked)).toBe('revoked');
+  });
+
+  it('describes each one truthfully', () => {
+    expect(describeMemberAccess(placeholder)).toBe('No account');
+    expect(describeMemberAccess(active)).toBe('Admin');
+    expect(describeMemberAccess(revoked)).toBe('No longer has access');
+  });
+
+  it('does not claim to know whether they left or were removed', () => {
+    // Nothing in the schema records which, and guessing would be a claim about
+    // a person. PR-10's activity feed is where that could come from.
+    expect(describeMemberAccess(revoked)).not.toMatch(/left|removed/i);
+  });
+
+  it('grants access only in the active state', () => {
+    // This is the gate for every control that acts on a role. Using `userId`
+    // instead — which is what the screens did — leaves "Change role" on screen
+    // for somebody the database will refuse.
+    expect(hasFamilyAccess(placeholder)).toBe(false);
+    expect(hasFamilyAccess(active)).toBe(true);
+    expect(hasFamilyAccess(revoked)).toBe(false);
+  });
+
+  it('names every role it can be handed', () => {
+    // A role added in a later phase must not fall through to "No account".
+    for (const role of ['owner', 'admin', 'member', 'guest'] as const) {
+      expect(describeMemberAccess({ userId: 'u', role })).not.toBe('No account');
+      expect(describeMemberAccess({ userId: 'u', role })).not.toBe('No longer has access');
+    }
   });
 });

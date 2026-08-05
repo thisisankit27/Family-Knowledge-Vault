@@ -26,6 +26,10 @@ export default function FamilyLayout() {
       {/* The list draws its own title inside the scroll area. */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="new" options={{ title: 'Add someone', presentation: 'modal' }} />
+      <Stack.Screen
+        name="delete"
+        options={{ title: 'Delete family', presentation: 'modal' }}
+      />
       {/* The detail screen sets its own title to the person's name. */}
       <Stack.Screen name="[memberId]/index" />
       <Stack.Screen name="[memberId]/edit" options={{ title: 'Edit details' }} />
