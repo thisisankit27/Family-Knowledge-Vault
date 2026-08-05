@@ -1,20 +1,35 @@
 import { Ionicons } from '@expo/vector-icons';
-import { StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { EmptyState } from '../../../src/components/EmptyState';
 import { Screen } from '../../../src/components/Screen';
+import { formatRelativeTime } from '../../../src/lib/relativeTime';
+import { getSupabase } from '../../../src/lib/supabase';
 import { useAuth } from '../../../src/providers/AuthProvider';
 import { useFamily } from '../../../src/providers/FamilyProvider';
+import {
+  createSupabaseActivityGateway,
+  describeActivity,
+  listActivity,
+  type ActivityEvent,
+} from '../../../src/services/activity';
+import {
+  createSupabaseMemberGateway,
+  listMembers,
+  type Member,
+} from '../../../src/services/member';
 import { theme } from '../../../src/theme';
 
 /**
  * The Dashboard.
  *
  * `docs/10-ui-ux-design.md` §11 calls this "the emotional center", answering
- * one question: *what's happening in my family's world today?* Right now the
- * honest answer is "nothing yet, because there is no family" — so the screen
- * says that and points at what comes next, rather than filling itself with
- * invented sample data.
+ * one question: *what's happening in my family's world today?* Until PR-10 the
+ * honest answer was "nothing yet", so the screen said so rather than filling
+ * itself with invented sample data. The activity feed is the first part of it
+ * that is real.
  */
 export default function DashboardScreen() {
   const { session } = useAuth();
@@ -38,6 +53,8 @@ export default function DashboardScreen() {
         />
       )}
 
+      {!!family && <ActivityCard familyId={family.id} viewerUserId={session?.user.id ?? null} />}
+
       <View style={styles.card}>
         <Text style={styles.cardLabel}>What this screen will show</Text>
         {PLANNED_SECTIONS.map((section) => (
@@ -55,11 +72,97 @@ export default function DashboardScreen() {
   );
 }
 
-/** From `docs/10-ui-ux-design.md` §11 and `docs/06-information-architecture.md` §4. */
+function ActivityCard({
+  familyId,
+  viewerUserId,
+}: {
+  familyId: string;
+  viewerUserId: string | null;
+}) {
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [people, setPeople] = useState<Member[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const supabase = getSupabase();
+    try {
+      // The member list is not decoration: a feed row stores ids, and the
+      // sentence is assembled from these names. That is what stops a row ever
+      // holding text it should not — see `src/services/activity.ts`.
+      const [nextEvents, nextPeople] = await Promise.all([
+        listActivity(createSupabaseActivityGateway(supabase), familyId),
+        listMembers(createSupabaseMemberGateway(supabase), familyId),
+      ]);
+      setEvents(nextEvents);
+      setPeople(nextPeople);
+    } finally {
+      setLoading(false);
+    }
+  }, [familyId]);
+
+  // On focus, not on mount: almost everything in this feed happens on somebody
+  // else's device, so a screen that loaded once would go quietly stale.
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  // A guest reads nothing here — the policy is one `can_see_record` call, and
+  // 'family' visibility delegates to `can_read_records`, which excludes them.
+  // They get the empty copy below rather than an error, which is the truth from
+  // where they are standing.
+  const lines = events
+    .map((event) => ({
+      id: event.id,
+      when: formatRelativeTime(event.createdAt),
+      // Null for an action this build does not recognise, so a later phase
+      // cannot make an older install render "undefined".
+      sentence: describeActivity(event, { people, viewerUserId }),
+    }))
+    .filter((line): line is typeof line & { sentence: string } => line.sentence !== null);
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardLabel}>Recent activity</Text>
+
+      {loading ? (
+        <ActivityIndicator color={theme.colors.primary} />
+      ) : lines.length === 0 ? (
+        // Deliberately not `EmptyState`: its badge reads "Arriving in …", which
+        // would be a lie about something that has arrived and simply has
+        // nothing to say yet.
+        <Text style={styles.empty}>
+          Nothing has happened yet. Adding someone to the family or inviting
+          them will show up here.
+        </Text>
+      ) : (
+        lines.map((line) => (
+          <View key={line.id} style={styles.event}>
+            <View style={styles.eventIcon}>
+              <Ionicons name="time-outline" size={14} color={theme.colors.primary} />
+            </View>
+            <View style={styles.eventText}>
+              <Text style={styles.eventSentence}>{line.sentence}</Text>
+              {!!line.when && <Text style={styles.eventWhen}>{line.when}</Text>}
+            </View>
+          </View>
+        ))
+      )}
+    </View>
+  );
+}
+
+/**
+ * From `docs/10-ui-ux-design.md` §11 and `docs/06-information-architecture.md` §4.
+ *
+ * "Family activity" left this list in PR-10 — it is above, and a roadmap that
+ * still promises what has shipped is the same dishonesty as a landing page that
+ * does.
+ */
 const PLANNED_SECTIONS = [
   'Upcoming events and birthdays',
   'Recent memories',
-  'Family activity',
   'Medical reminders',
   'Recently added documents',
   'Quick actions',
@@ -90,5 +193,37 @@ const styles = StyleSheet.create({
   rowText: {
     fontSize: theme.typography.body,
     color: theme.colors.text,
+  },
+  empty: {
+    fontSize: theme.typography.body,
+    lineHeight: 24,
+    color: theme.colors.textMuted,
+  },
+  event: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  eventIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eventText: {
+    flex: 1,
+    gap: 2,
+  },
+  eventSentence: {
+    fontSize: theme.typography.body,
+    lineHeight: 22,
+    color: theme.colors.text,
+  },
+  eventWhen: {
+    fontSize: theme.typography.caption,
+    color: theme.colors.textMuted,
   },
 });

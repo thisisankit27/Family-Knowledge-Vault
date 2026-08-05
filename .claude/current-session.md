@@ -529,7 +529,7 @@ Every record table from Phase 3 points at the person, so this is fixed now, whil
 
 1. **Rename `family_members` → `family_users`** (accounts + role). New `family_members` = people. Future tables read `documents.member_id → family_members.id`.
 2. **Phase 2 is five PRs:** PR-7, PR-8, PR-9a, PR-9b, PR-10. PR-9 split because it was ~3.5h.
-3. **Record visibility decided in PR-9a, applied from Phase 3** — a `visibility text default 'family' check (in ('family','restricted'))` column on every record table *at creation time*. Retrofitting it across documents, medical, memories and recipes later is a migration plus a policy rewrite on each.
+3. **Record visibility decided in PR-9a, applied from Phase 3** — a `visibility text default 'family' check (in ('family','private'))` column on every record table *at creation time*. Retrofitting it across documents, medical, memories and recipes later is a migration plus a policy rewrite on each. *(Corrected 2026-08-06: this line said `'restricted'` until PR-10. PR-9a renamed the value to `private`, because "restricted" is developer language and never says restricted to whom — see `docs/15-permission-matrix.md` §8.2.)*
 4. **PR-3b is a release gate, not a roadmap item** (user's reframing — better than inserting it mid-phase). See the gate below.
 
 ## The mechanism that stops PR-9a rewriting PR-7 and PR-8
@@ -1190,3 +1190,161 @@ stats (`gh pr list --state merged` count, `npm test` plus the RLS suite), "What 
 
 Then the **Release Gate** before any external tester: password reset (PR-3b), email verification,
 and a production email provider — all three blocked on the same email-infrastructure decision.
+
+---
+---
+
+# PR-10 Complete — Activity Feed (2026-08-06)
+
+**Status: built, two migrations applied, 312 CI tests and 151 RLS tests passing, bundle verified,
+landing page updated. Not yet demoed on device — that is the stream.**
+
+## What shipped
+
+- **`20260807090000_family_activity.sql`** — the table, one SELECT policy, four cascade-guarded
+  trigger functions on `families`, `family_members`, `family_users` and `family_relationships`.
+- **`20260807093000_activity_clock_timestamp.sql`** — the correction below.
+- **`src/lib/relativeTime.ts`** + 17 tests; **`src/services/activity.ts`** + 27 tests;
+  **`src/services/activity.rls.test.ts`** (15 tests).
+- **Dashboard** — a "Recent activity" card loaded on focus. `'Family activity'` left
+  `PLANNED_SECTIONS`, because a roadmap that still promises what has shipped is the same dishonesty
+  as a landing page that does.
+
+## The two properties that make this table safe
+
+**A row stores references, never prose.** Action, actor, subject id — the sentence is assembled on
+the device from the current member list. Names therefore never go stale, and, the reason that
+matters, **a row physically cannot hold a record title.** From Phase 3 a feed entry reading "Ankit
+added *Therapy notes*" would leak a private record through its own name (matrix §9.5). Storing the
+title nowhere is a stronger guarantee than remembering not to show it. A unit test asserts no
+rendered sentence can contain an id.
+
+**The SELECT policy is a single `can_see_record` call.** That one expression delivers the whole of
+matrix §4.5: outsiders refused by `has_family_access`, **Guests refused because `'family'`
+visibility delegates to `can_read_records`**, private rows filtered to author-or-subject. No role
+name appears anywhere in this migration. That is the payoff for PR-9a shipping the resolver before
+any table needed it, and it is the pattern every Phase 3 record table copies.
+
+## `now()` is transaction time — the finding worth keeping
+
+The RLS suite asserted the feed opens with the family being created, and it failed about half the
+time. `create_family` writes two events in one transaction — `family_created`, then
+`access_granted` for its creator — and **`now()` returns the transaction start, so both rows got an
+identical `created_at` and ordering between them was arbitrary.** The feed could show somebody
+joining a family that did not exist yet.
+
+`clock_timestamp()` reads the wall clock per statement. Fixed in a second migration rather than by
+editing the first, which was already applied: **migration history is append-only.**
+
+This will recur. Transferring ownership writes two `role_changed` rows in one transaction, and every
+Phase 3 trigger that logs alongside a record write will do the same.
+
+## The cascade guard, for the third time
+
+Deleting a family cascades to three tables that now carry logging triggers, each of which would try
+to insert a row referencing a family already gone inside the transaction — a foreign-key violation
+whose symptom is that families quietly become undeletable. `log_family_event` checks the family
+still exists before inserting, and an RLS test is named for it.
+
+**Three appearances now**: PR-7's backfill defect, PR-9a's `enforce_last_owner`, and this. The
+question to ask of any trigger or migration is *what does this mean for rows that already exist, or
+are on their way out?*
+
+## The feed can tell leaving from being removed
+
+PR-9b's people list deliberately refuses to guess — a person row records no reason, and guessing
+would be a claim about a person. The feed stored both the actor and the subject, so comparing them
+answers it: same person means "Priya left the family", different means "You removed Priya's access".
+The promise made in PR-9b's checkpoint, delivered.
+
+## The device test found the half of the feed that was still third-person
+
+The actor rendered as "You"; the subject never did. Read as Priya, a role change said *"Ankit made
+Priya an admin"* — news about somebody else, and that is the half of the feed a person most wants
+to notice.
+
+The subject now gets the same courtesy, and it needs **two** forms rather than one:
+`${subject}'s details` renders "you's details", so there is a separate `subjectPossessive` giving
+"your". A test asserts no action can produce `you's` for any input.
+
+The comparison is `person.userId && person.userId === viewerUserId` — the left-hand guard matters,
+because most people in a family have a null `user_id` and a null-to-null match would make every
+placeholder relative read as "you" to a signed-out viewer. There is a test for that too.
+
+## Deliberate gaps
+
+- **No realtime.** The feed loads on screen focus. Supabase Realtime would suit it and costs free-tier
+  connections; unscheduled.
+- **No pagination.** Ten rows, newest first. No "show more", and no retention policy — the table
+  grows forever, which the free-tier database ceiling will eventually notice.
+- **Relationship events do not say what the relationship was.** "Ankit added a relationship for
+  Nani" — the type and the other person are not in the row, because a row carries one subject.
+- **No filtering by kind or person**, and the feed is not reachable from anywhere but the Dashboard.
+- **A Guest sees no feed at all**, which is correct per matrix §4.5 but reads as an empty card
+  rather than an explanation.
+
+---
+---
+
+# Phase 2 Close-out — "Meet the Family" (2026-08-06)
+
+**Five PRs: PR-7 Family Profiles, PR-8 Family Relationships, PR-9a Roles & Permission Matrix,
+PR-9b Membership Lifecycle, PR-10 Activity Feed. 18 pull requests merged in total, 312 CI tests and
+151 RLS tests, ten migrations.**
+
+## What a stranger can now do
+
+Create an account, create a family, invite people by role with single-use codes, join, add relatives
+who will never sign in, record who is whose parent, spouse or sibling, hand out one of four roles,
+change them, remove somebody's access, leave, hand the family over, delete it behind a typed
+confirmation, and see a history of all of it.
+
+## The three bug shapes this phase taught
+
+Each cost real time and each will recur in Phase 3:
+
+1. **"What about rows that already exist — or are on their way out?"** PR-7 shipped a table with no
+   backfill and every pre-existing family lost its member list. PR-9a and PR-10 both needed a
+   cascade guard so that deleting a family did not trip a trigger written for the living case.
+2. **An authorisation rule is rarely a single rank comparison.** Three separate corrections to
+   `docs/15-permission-matrix.md` came from assuming otherwise. `role_rank` compares *actors*; it
+   must never appear in a permission check.
+3. **A capability with no interface is not shipped.** Invitation revocation (PR-6), the access-table
+   DELETE policy (PR-5), and family deletion (PR-5) all existed with passing tests and no way to
+   reach them. **Ask at the end of every phase: what does the database already permit that no screen
+   offers?**
+
+## What the phase deliberately did not do
+
+Person deletion (`family_members.deleted_at` is reserved for a future Person Lifecycle PR),
+multi-family switching, recovery of a deleted family, realtime, the visual family tree (Phase 6+),
+and per-record ACLs (Phase 10).
+
+## Still open, unchanged
+
+The **Release Gate** before any external tester — password reset (PR-3b), email verification, and a
+production email provider, all three blocked on the same email-infrastructure decision. Plus
+Checkpoint 1's findings #4 (cross-family sharing), #5 (DPDP/compliance), #6, #7, #8 and #10.
+
+---
+---
+
+# Phase 3 Kickoff — read this first
+
+**`docs/16-phase-3-brief.md` is the entry point for Phase 3.** It was written at the close of Phase 2
+for the same reason `docs/15` was written before PR-9a, and it carries the things a cold session
+cannot derive:
+
+- The record spine and the mandatory SELECT policy, copied verbatim — **PR-11 does no permission
+  design.**
+- The storage path contract, and the five storage decisions that **do not exist anywhere in the
+  repo**: bucket name, MIME allow-list, size cap, thumbnails, filename sanitisation.
+- The free-tier ceiling Phase 3 is the first to consume.
+- **Four contradictions in the existing docs** that must be resolved rather than silently decided:
+  what "Document Sharing" means, whether a document belongs to one member or several, archive versus
+  soft delete, and versioning.
+- **`react-native-pdf` is not an Expo module** and this project demos on Expo Go pinned to SDK 54.
+  PR-13 has a workflow decision before it has code.
+
+Its §9 is a five-item checklist to settle before the first line of PR-11. Three of the five change
+the schema.

@@ -151,6 +151,18 @@ means each role a later phase invents silently inherits every permission
 written before it existed. `role_rank()` compares *actors* and must never
 appear in a permission check.
 
+**A log is written by triggers and read by nobody's UPDATE.** `family_activity`
+has no INSERT, UPDATE or DELETE policy and only a `select` grant; four
+`SECURITY DEFINER` triggers are its only writers. It stores references — an
+action, an actor, a subject id — and never prose, so a feed row physically
+cannot carry a record's title into a screen that should not show it
+(`docs/15-permission-matrix.md` §9.5). Its whole SELECT policy is one
+`can_see_record` call.
+
+**`now()` is transaction time.** Every row a transaction writes shares it, so
+two events written by one function cannot be ordered. Anything that logs uses
+`clock_timestamp()`.
+
 **Every record table from Phase 3 carries the same spine** — `family_id`,
 `member_id` with a composite FK, `visibility`, `created_by`, `created_at`,
 `updated_at`, `deleted_at` — and its SELECT policy is exactly
