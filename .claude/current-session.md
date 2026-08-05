@@ -1057,3 +1057,136 @@ an Owner or another Admin.
 Then PR-10 (Activity Feed — entries referencing a record must inherit that record's visibility, or
 a row reading "Ankit added *Therapy notes*" leaks a private record through its title), then the
 end-of-Phase-2 landing page update per the `CLAUDE.md` checklist.
+
+---
+---
+
+# PR-9b Complete — Membership Lifecycle (2026-08-06)
+
+**Status: built, migration applied, 265 CI tests and 136 RLS tests passing, bundle verified.
+Not yet demoed on device — that is the stream.**
+
+## What shipped
+
+- **`20260806090000_membership_lifecycle.sql`** — `remove_family_access` and `leave_family`, the
+  remaining two writers of the write-closed `family_users`. Both take the family-row lock as their
+  first statement, exactly as `set_family_role` does.
+- **`src/services/access.ts`** + 22 unit tests — `removeAccess`, `leaveFamily`,
+  `transferOwnership`, `canRemoveAccess`, `describeAccessError`, gateway.
+- **`src/services/membership.rls.test.ts`** — 18 tests against the real database.
+- **`deleteFamily`** on the existing `FamilyGateway` — a plain policy-gated delete, no RPC.
+- **UI** — "Remove access" and "Make owner and step down" on the member detail card; "Leave
+  family" in the More tab's account panel; a new `family/delete.tsx` with a typed confirmation;
+  a quiet owner-only "Delete this family" at the foot of the Family tab.
+
+## Deleting a family needed no migration at all
+
+The `families` DELETE policy (`can_manage_family`) and its grant have worked since PR-5 and are
+asserted by `permissions.rls.test.ts`. The capability existed and was simply unreachable — the
+third time this project has found a shipped-but-unwired capability, after invitation revocation
+(PR-6) and the access-table DELETE policy (PR-5, since removed).
+
+**Worth checking for at the end of every phase:** what does the database already permit that no
+screen offers?
+
+## The matrix was wrong twice more — and once identically to PR-9a
+
+**1. "Rank on removal" is not a rank comparison.** §4.2 said "an Admin may not remove an Owner or
+another Admin" and gave the helper as `can_manage_members` **+ rank**, implying one comparison.
+Neither works: `rank(actor) > rank(target)` blocks an Owner removing a co-owner — the case removal
+exists for — and `rank(actor) >= rank(target)` lets an Admin remove another Admin. It is two
+clauses. **This is the third time a single `role_rank` comparison has been assumed to express an
+authorisation rule**, after `set_family_role` and the invitation cap. §5.2 of the matrix already
+forbids exactly this and the warning was not enough on its own.
+
+**2. Transfer is not a database primitive.** §7.1 path 5 promised "one locked function". Once
+owners are plural, the state between the two role changes is *two owners* — which the product
+supports — so a half-finished transfer leaves nothing broken and needs no transaction. It ships as
+`transferOwnership` in `access.ts`: two `set_family_role` calls, and the **only** place the
+promote-before-demote order is written down. Demoting yourself first is refused by the last-owner
+guarantee, so the ordering is the entire value.
+
+Matrix is now **v1.2**. Five corrections across two PRs, all five found by writing the test.
+
+## A test that passed for the wrong reason, caught and fixed
+
+`refuses to remove the last owner` passed on the first run — but the actor had already been removed
+from the family, so the refusal was "not allowed to remove this person", not the last-owner rule.
+Exactly what PR-6 recorded: *an assertion that something was refused only means something if
+nothing else could have refused it.*
+
+Investigating it produced a better finding: **the last-owner branch inside `remove_family_access`
+is unreachable.** Only an owner may remove an owner, so if the target is the last owner the actor
+is either that same person — caught by the self-check, which redirects to `leave_family` — or
+somebody who may not remove an owner at all. There is no third case. The branch stays as a
+backstop, with a comment saying so, because the reasoning that makes it unreachable lives in two
+*other* clauses and either of them moving would make it load-bearing. The test now asserts both
+real doors instead of pretending to test the dead one.
+
+## The bug the first device test found — three states, not two
+
+Removing somebody made the people list show them as **"No account"**, next to placeholder relatives
+who genuinely have none. The code had been asking `member.role ? label : 'No account'` since PR-7,
+which was correct only while losing access was impossible.
+
+Having an **account** and having **access to this family** are different things, and there are
+three states:
+
+| `userId` | `role` | Means | Label |
+|---|---|---|---|
+| `null` | `null` | A person somebody typed in | *No account* |
+| set | set | Has access | the role |
+| set | `null` | Left, or was removed | *No longer has access* |
+
+The label was the visible half. The other half was worse: the third state still rendered **"Change
+role"** and **"Make owner and step down"**, both gated on `!!member.userId`, and both would have
+failed with *"That person does not have access to this family"* — the exact class of always-failing
+button PR-9a removed. The change-role screen had the same guard and would have shown a full picker
+that saved into a refusal.
+
+Fixed by moving the distinction into `member.ts` — `memberAccess`, `hasFamilyAccess`,
+`describeMemberAccess` — so no screen decides it independently, with five unit tests. Every control
+that acts on a role is now gated on `hasFamilyAccess`, never on `userId`.
+
+**The copy deliberately does not say "left" or "was removed".** Nothing in the schema records which
+of the two happened, and guessing would be a claim about a person. A test asserts the string
+contains neither word. PR-10's activity feed is where that distinction can legitimately come from.
+
+**The general lesson:** when a PR makes a previously impossible state reachable, every ternary that
+assumed two states is now wrong, and none of them will fail a test or a typecheck — `role` was
+already nullable. Grep for the old assumption rather than trusting the compiler.
+
+## Deliberate gaps
+
+- **`family_members.deleted_at` is still unreachable, on purpose.** Recorded as *reserved* in
+  matrix §10 against a future **Person Lifecycle** PR. Revoking an account's access and removing a
+  person from the family are different domain operations; coupling them would make "remove" mean
+  two things. That PR also has to decide what happens to the person's relationships and, from
+  Phase 3, their records.
+- **No recovery for a deleted family.** `families` has no `deleted_at`; the cascade is real. The
+  delete screen says so in those words rather than implying a trash can exists.
+- **Leaving does not offer to hand over first.** A sole owner is told to choose a new owner and
+  given a button to the people list, but the two flows are not joined into one wizard.
+- **A removed member's own device keeps showing the family until it re-reads.** `FamilyProvider`
+  has no push channel; their next fetch returns nothing.
+- **The migration file was edited after `db push`** to improve one comment inside a function body.
+  Behaviour is identical and the tests pass, but `pg_get_functiondef` on the live database will
+  differ from the file by that comment until a fresh environment applies the migrations.
+
+## Next action
+
+**PR-10 — Activity Feed**, the last PR of Phase 2. One `family_activity` table, triggers, and a
+Dashboard feed. Two constraints already recorded and both easy to miss:
+
+1. **Triggers must target the renamed tables** (`family_users` for access, `family_members` for
+   people).
+2. **Feed entries referencing a record must inherit that record's visibility** — matrix §9.5. A row
+   reading "Ankit added *Therapy notes*" leaks a private record through its title, and the feed is
+   the first place visibility can escape the table that protects it.
+
+Then **end of Phase 2: update the landing page Progress section** per the `CLAUDE.md` checklist —
+stats (`gh pr list --state merged` count, `npm test` plus the RLS suite), "What works today",
+"What does not work yet" sourced from the *Deliberate gaps* sections above, and the phase list.
+
+Then the **Release Gate** before any external tester: password reset (PR-3b), email verification,
+and a production email provider — all three blocked on the same email-infrastructure decision.

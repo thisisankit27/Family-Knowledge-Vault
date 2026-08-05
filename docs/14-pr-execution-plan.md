@@ -277,6 +277,33 @@ rather than by re-reading the document: the invitation rank cap was specified tw
 executes it. The matrix survived precisely because §11 required it to ship as a test fixture — the
 prose alone would have been wrong in three places and nobody would have known until Phase 3.
 
+## 7.3 What building PR-9b changed (2026-08-06)
+
+PR-9b gave `family_users` its remaining two writers — `remove_family_access` and `leave_family` —
+and gave the `families` DELETE policy, which has worked and been untouchable since PR-5, an
+interface at last.
+
+**The matrix was wrong twice more, and once was the same mistake as PR-9a.** §4.2's "rank on
+removal" implied one comparison; no single comparison works, because `>` blocks an Owner removing a
+co-owner and `>=` lets an Admin remove another Admin. §7.1 path 5 promised a locked
+`transfer_ownership` function; transfer is not a database primitive at all now that owners are
+plural, because the state between the two role changes is *two owners*, which is valid. It ships as
+a service-layer macro whose only job is to encode the promote-before-demote order.
+
+The document is v1.2. Five corrections across two PRs, three of them the same reach for a
+`role_rank` comparison that §5.2 already forbids.
+
+**Scope grew by one item and it was the right call.** A sole owner cannot leave — the last-owner
+guarantee correctly refuses it — so without a way to delete a family, "Leave family" dead-ends for
+exactly the person most likely to press it. Deleting needed no migration, only a screen: a typed
+confirmation, an itemised list of what goes, and plain language that nothing comes back. That is
+the app's first irreversible action and the first thing `Alert.alert` could not express.
+
+**`family_members.deleted_at` stays deliberately unreachable.** Removing an account's access and
+removing a person from the family are different domain operations; coupling them would make
+"remove" mean two things. Recorded as *reserved* in matrix §10, against a future Person Lifecycle
+PR.
+
 ---
 
 # 8. How Resumption Works
