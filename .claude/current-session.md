@@ -948,3 +948,112 @@ PR-9a checkpoint here, and add the write-closed-`family_users` rule and the reco
 The review produced documentation only. It is committed on **`pr-9a-planning`**, branched from
 `pr-8-family-relationships` so it does not wait on PR #13. If #13 merges first, this branch rebases
 onto `master` cleanly — it touches no file PR-8 touched except `.claude/current-session.md`.
+
+---
+---
+
+# PR-9a Complete — Roles, Permissions & Visibility (2026-08-05)
+
+**Status: built, migration applied to the live project, 237 CI tests and 118 RLS tests passing,
+bundle verified. Not yet demoed on device — that is the stream.**
+
+## What shipped
+
+- **`20260805090000_roles_and_permission_matrix.sql`** — the whole PR-9a scope in one migration:
+  both role check constraints widened to four values, `role_rank`, the helpers rewritten as
+  allow-lists plus `can_read_records` / `can_write_records` / `can_delete_records`,
+  `can_see_record`, `family_users` write-closed with `set_family_role` as its only writer,
+  `create_invitation` rank-capped, the last-owner backstop trigger with its cascade guard, and
+  `families.created_by` pinned.
+- **`src/services/role.ts`** + 26 unit tests — labels, descriptions, `roleRank`, `invitableRoles`,
+  the UI-gating predicates, `setRole`, `describeRoleError`, gateway.
+- **`src/services/permissions.rls.test.ts`** — 58 tests against the real database.
+- **`app/(app)/(tabs)/family/[memberId]/role.tsx`** — the change-role screen; role chips on the
+  invite card; `ROLE_LABELS` wherever a role is drawn.
+
+## Three things the specification got wrong, found by building it
+
+`docs/15-permission-matrix.md` was written before implementation and is now v1.1. Each correction
+is marked in place in that document rather than quietly rewritten.
+
+**1. The invitation rank cap was stated two incompatible ways** — "a role *below* their own" and
+"Owner may invite any role", in the same paragraph. Strictly-below forbids an Owner inviting an
+Owner, which is the only way a family acquires a second owner and is behaviour PR-6 already
+shipped. Built as `role_rank(invited) <= role_rank(inviter)`. An Admin inviting an Admin is
+lateral, not an escalation; what the cap closes is an Admin minting an *Owner* code.
+
+**2. `set_family_role` has no rank comparison, deliberately.** The plan said "refuse acting on an
+equal-or-higher rank". The function is gated on `can_manage_family`, which is Owner-only — so every
+caller is rank 3 and every Owner target is rank 3, and that clause would have refused every
+owner-to-owner change including self-demotion. The last-owner assertion would have been unreachable
+and the concurrency test unpassable. **What stops an Admin is the Owner gate, not a hierarchy.**
+
+**3. `can_see_record` needed a `has_family_access` gate the spec did not have.** `record_author =
+auth.uid()` stays true forever, so without the gate somebody removed from a family in PR-9b would
+keep reading every private record they had ever written. Access to the tenant is a precondition of
+every branch, not an alternative to one.
+
+The general lesson: **all three were found by trying to write the test, not by re-reading the
+prose.** A document asserting behaviour is a hypothesis until something executes it.
+
+## The concurrency test is the one worth keeping
+
+`the last-owner guarantee › lets exactly one of two concurrent self-demotions through` is the only
+test in the suite that would fail if the `select … for update` on the family row were removed.
+Under READ COMMITTED both transactions read `count(*) = 2` — neither sees the other's uncommitted
+write — so both pass their check, both commit, and the family is left with no owner. A trigger
+cannot help: it runs in the same transaction on the same snapshot and is equally blind.
+
+Two owners, `Promise.all`, exactly one succeeds. Everything else about the guarantee is a `count`.
+
+## Five existing tests changed, and why that is not a regression
+
+- **Two in `family.rls.test.ts`** — Alice's cross-family `update`/`delete` on `family_users` now
+  return `42501` instead of an RLS-filtered empty result, because the privileges are revoked
+  outright. That is a *stronger* refusal: it does not depend on a policy expression being right.
+  What both tests actually pin — that Bob's row is untouched — is unchanged.
+- **Three in `invitation.rls.test.ts`** plus two unit assertions — `'Only an owner can invite'`
+  became `'Not allowed to invite people to this family'`, because inviting stopped being
+  owner-only the moment Admins arrived and the old message was simply untrue.
+
+## Gotchas from this session
+
+- **`curl http://localhost:8081/index.bundle` returns 404** on this project and the note in the
+  PR-1 checkpoint is stale. Expo Router's entry is
+  `/node_modules/expo-router/entry.bundle?platform=android&dev=true` (or
+  `/.expo/.virtual-metro-entry.bundle?…`). Both return 200 when the bundle compiles.
+- **The constraint-name warning was real and the guess was right.** `family_users` did still carry
+  `family_members_role_check`. The migration drops it *without* `if exists` on purpose — a silent
+  no-op would have left the two-value constraint live and every new role would have been rejected
+  at runtime, on a device.
+- **The last-owner tests must clean up from both accounts.** Each one demotes an owner, and a
+  demoted account cannot delete the family it created, so clearing only the creator leaves the
+  other account stuck inside a family that outlives the test.
+
+## Deliberate gaps
+
+- **No record table exists yet.** `can_see_record` and the three record helpers are tested by
+  direct call. PR-11 is the first to use them, and its only job on this front is to copy the spine
+  from `docs/15-permission-matrix.md` §8.2 — it does no permission design.
+- **No UI removes access, transfers ownership, or lets anyone leave.** All three are PR-9b, and all
+  three take the same family-row lock.
+- **A Guest still reads `date_of_birth` and `blood_group`** straight from PostgREST, because
+  `family_members`' SELECT policy is `has_family_access`. Recorded as a known gap in the matrix
+  §10, not a fix — masking them in `list_family_members` would be theatre while the table is
+  readable directly. Resolves structurally in Phase 5.
+- **Nobody can be invited as an Owner from the UI without also being able to invite everyone else**
+  — the chips offer whatever `invitableRoles` returns, which is correct, but there is no
+  confirmation step on handing out ownership.
+
+## Next action
+
+**PR-9b — Membership Lifecycle**: remove a member, leave a family, transfer ownership. Every one
+changes the owner count, so all three take `select … from families … for update` as their first
+statement, exactly as `set_family_role` does. Removal deletes only the `family_users` row and
+**leaves `family_members.user_id` intact**, so a rejoining member is matched rather than
+duplicated. Removal is also where the *rank* rule finally earns its place: an Admin may not remove
+an Owner or another Admin.
+
+Then PR-10 (Activity Feed — entries referencing a record must inherit that record's visibility, or
+a row reading "Ankit added *Therapy notes*" leaks a private record through its title), then the
+end-of-Phase-2 landing page update per the `CLAUDE.md` checklist.
