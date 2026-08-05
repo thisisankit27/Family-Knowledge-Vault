@@ -72,14 +72,17 @@ export const TAB_DOMAINS: Domain[] = [
     label: 'Home',
     icon: 'home-outline',
     summary: "What's happening in your family's world today",
-    arrivesIn: 'PR-4',
+    // Shipped. `arrivesIn` is required on every domain and has no "already
+    // here" value, so the string carries it — the alternative is a type change
+    // that four call sites and a test would follow.
+    arrivesIn: 'Shipped',
   },
   {
     id: 'family',
     label: 'Family',
     icon: 'people-outline',
     summary: 'Everyone in your family, and how they connect',
-    arrivesIn: 'PR-5 to PR-10',
+    arrivesIn: 'Shipped',
   },
   {
     id: 'documents',
