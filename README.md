@@ -125,6 +125,29 @@ client. Any function written this way must set `search_path = ''` and fully
 qualify every object it touches, or a caller can shadow a table and have it
 read with elevated rights.
 
+**`family_users` is write-closed.** It has no INSERT, UPDATE or DELETE policy,
+and `update`/`delete` are revoked from `authenticated` underneath. A policy can
+gate *who* writes but cannot pin *which row* or *what value*, and cannot hold a
+row lock — so an Admin gated only by "may manage members" could set their own
+row to `owner`. `set_family_role()` is the only writer; PR-9b adds the rest on
+the same pattern.
+
+**Every policy calls an intent-named helper — `can_edit_people(family)` — never
+a role name.** That is why the role model widened from two values to four in
+PR-9a while nine of eleven policies went untouched. Every helper body is an
+allow-list (`role in ('owner','admin')`, never `role <> 'guest'`); a deny-list
+means each role a later phase invents silently inherits every permission
+written before it existed. `role_rank()` compares *actors* and must never
+appear in a permission check.
+
+**Every record table from Phase 3 carries the same spine** — `family_id`,
+`member_id` with a composite FK, `visibility`, `created_by`, `created_at`,
+`updated_at`, `deleted_at` — and its SELECT policy is exactly
+`can_see_record(family_id, visibility, member_id, created_by) and deleted_at is
+null`. `created_by` is the one column that genuinely cannot be added later:
+there is no way to backfill who created an existing row. Full contract:
+`docs/15-permission-matrix.md` §8.
+
 ---
 
 ## Project Structure

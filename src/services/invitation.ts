@@ -95,8 +95,13 @@ export function describeInvitationError(message: string): string {
   if (normalised.includes('expired')) {
     return 'That code has expired. Ask for a new one.';
   }
-  if (normalised.includes('only an owner can invite')) {
-    return 'Only the family owner can invite people.';
+  if (normalised.includes('not allowed to invite')) {
+    // Reworded in PR-9a: inviting is no longer owner-only, so "only the owner
+    // can" became untrue the moment Admins arrived.
+    return 'Only an owner or an admin can invite people.';
+  }
+  if (normalised.includes('higher role than your own')) {
+    return 'You cannot invite someone at a higher role than your own.';
   }
   if (normalised.includes('not authenticated')) {
     return 'Your session has expired. Sign in again.';

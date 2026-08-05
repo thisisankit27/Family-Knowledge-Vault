@@ -18,6 +18,7 @@ import {
   removeRelationship,
   type RelationshipView,
 } from '../../../../../src/services/relationship';
+import { canChangeRoles, canEditPeople, ROLE_LABELS } from '../../../../../src/services/role';
 import { theme } from '../../../../../src/theme';
 
 /**
@@ -29,7 +30,7 @@ import { theme } from '../../../../../src/theme';
  */
 export default function MemberDetailScreen() {
   const { memberId } = useLocalSearchParams<{ memberId: string }>();
-  const { family } = useFamily();
+  const { family, role: myRole } = useFamily();
 
   const [members, setMembers] = useState<Member[]>([]);
   const [relationships, setRelationships] = useState<RelationshipView[]>([]);
@@ -119,14 +120,26 @@ export default function MemberDetailScreen() {
           <Text style={styles.facts}>{describeFacts(member)}</Text>
           {!!member.email && (
             <Text style={styles.account}>
-              Signs in as {member.email} · {member.role === 'owner' ? 'Owner' : 'Member'}
+              Signs in as {member.email}
+              {member.role ? ` · ${ROLE_LABELS[member.role]}` : ''}
             </Text>
           )}
-          <Button
-            label="Edit details"
-            variant="quiet"
-            onPress={() => router.push(`/(app)/(tabs)/family/${member.id}/edit`)}
-          />
+          {canEditPeople(myRole) && (
+            <Button
+              label="Edit details"
+              variant="quiet"
+              onPress={() => router.push(`/(app)/(tabs)/family/${member.id}/edit`)}
+            />
+          )}
+          {/* Only for people who have an account: a role is a property of
+              signing in, and most people in a family never will. */}
+          {canChangeRoles(myRole) && !!member.userId && (
+            <Button
+              label="Change role"
+              variant="quiet"
+              onPress={() => router.push(`/(app)/(tabs)/family/${member.id}/role`)}
+            />
+          )}
         </View>
 
         <View style={styles.card}>
@@ -134,8 +147,9 @@ export default function MemberDetailScreen() {
 
           {relationships.length === 0 ? (
             <Text style={styles.body}>
-              No relationships recorded yet. Linking people is what lets the
-              family tree and "everything about this person" work later.
+              {canEditPeople(myRole)
+                ? 'No relationships recorded yet. Linking people is what lets the family tree and "everything about this person" work later.'
+                : 'No relationships recorded yet.'}
             </Text>
           ) : (
             relationships.map((view) => (
@@ -149,15 +163,17 @@ export default function MemberDetailScreen() {
                   </Text>
                   <Text style={styles.relationshipLabel}>{view.label}</Text>
                 </View>
-                <Pressable
-                  onPress={() => confirmRemove(view)}
-                  disabled={removingId === view.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove relationship with ${nameOf(view.otherMemberId)}`}
-                  style={styles.remove}
-                >
-                  <Ionicons name="close" size={18} color={theme.colors.textMuted} />
-                </Pressable>
+                {canEditPeople(myRole) && (
+                  <Pressable
+                    onPress={() => confirmRemove(view)}
+                    disabled={removingId === view.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove relationship with ${nameOf(view.otherMemberId)}`}
+                    style={styles.remove}
+                  >
+                    <Ionicons name="close" size={18} color={theme.colors.textMuted} />
+                  </Pressable>
+                )}
               </View>
             ))
           )}
@@ -168,11 +184,13 @@ export default function MemberDetailScreen() {
             </Text>
           )}
 
-          <Button
-            label="Add relationship"
-            variant={relationships.length === 0 ? 'primary' : 'quiet'}
-            onPress={() => router.push(`/(app)/(tabs)/family/${member.id}/relationship`)}
-          />
+          {canEditPeople(myRole) && (
+            <Button
+              label="Add relationship"
+              variant={relationships.length === 0 ? 'primary' : 'quiet'}
+              onPress={() => router.push(`/(app)/(tabs)/family/${member.id}/relationship`)}
+            />
+          )}
         </View>
       </ScrollView>
     </>

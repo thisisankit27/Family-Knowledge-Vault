@@ -2,13 +2,15 @@ import * as Clipboard from 'expo-clipboard';
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { FamilyRole } from '../services/family';
+import { ROLE_LABELS } from '../services/role';
 import { theme } from '../theme';
 
 interface InviteCodeProps {
   code: string;
   expiresAt: string;
-  role: 'owner' | 'member';
-  /** Omitted for non-owners, who have no power to revoke. */
+  role: FamilyRole;
+  /** Omitted for anyone who cannot revoke. */
   onRevoke?: () => void;
   revoking?: boolean;
 }
@@ -68,7 +70,7 @@ export function InviteCode({
       </Pressable>
 
       <Text style={styles.meta}>
-        {copied ? 'Copied' : 'Tap to copy'} · joins as {role} · expires in{' '}
+        {copied ? 'Copied' : 'Tap to copy'} · joins as {ROLE_LABELS[role].toLowerCase()} · expires in{' '}
         {days === 1 ? '1 day' : `${days} days`}
       </Text>
 

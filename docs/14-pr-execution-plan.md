@@ -263,6 +263,20 @@ function. The intent-helper mechanism still did its job — nine of eleven polic
 the whole record layer in Phase 3 inherits it — but the number was wrong and is corrected here
 rather than quietly.
 
+## 7.2 What building PR-9a changed (2026-08-05)
+
+The review's estimate held — PR-9a came in around its ~2h40 — and every security item shipped. What
+did not hold was three statements the review made about *behaviour*, each found by writing the test
+rather than by re-reading the document: the invitation rank cap was specified two incompatible ways,
+`set_family_role` turned out to need no rank comparison at all, and `can_see_record` needed a
+`has_family_access` gate the spec omitted. All three are corrected in place in
+`docs/15-permission-matrix.md` (now v1.1) and explained in the PR-9a checkpoint in
+`.claude/current-session.md`.
+
+**The reusable point for later phases:** a written contract is a hypothesis until something
+executes it. The matrix survived precisely because §11 required it to ship as a test fixture — the
+prose alone would have been wrong in three places and nobody would have known until Phase 3.
+
 ---
 
 # 8. How Resumption Works

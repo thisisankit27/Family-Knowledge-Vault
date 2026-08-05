@@ -2,9 +2,13 @@
 
 **Project:** Family Knowledge Vault
 
-**Version:** 1.0
+**Version:** 1.1
 
-**Status:** Decided — 2026-08-04. Authoritative for every phase from PR-9a onward.
+**Status:** Decided 2026-08-04, **implemented in PR-9a on 2026-08-05.** Authoritative for every
+phase from here onward. Version 1.1 folds in three corrections found while building it — the
+invitation rank cap (§4.2), the absence of a rank check in `set_family_role` (§7.1), and the
+`has_family_access` gate on `can_see_record` (§8.3). Each is marked in place rather than silently
+rewritten.
 
 ---
 
@@ -106,9 +110,15 @@ is the property that stops it rotting.
 | Change a role | ✓ | — | — | — | `can_manage_family` |
 | Leave the family | ✓* | ✓ | ✓ | ✓ | self |
 
-**Rank cap** — an inviter may only invite a role *below* their own. Owner may invite any role;
-**Admin may invite Member or Guest only.** Without this, an Admin mints an owner-role code and
-redeems it on a second account. See §6.2.
+**Rank cap** — `role_rank(invited) <= role_rank(inviter)`. Nobody hands out more access than they
+hold: an Owner may invite any role including Owner, an **Admin may invite Admin, Member or Guest,
+and no Admin may mint an Owner code.** See §6.2.
+
+> **Corrected 2026-08-05, during PR-9a.** This paragraph originally said "a role *below* their own"
+> in the same breath as "Owner may invite any role", and the two cannot both be true — strictly-
+> below forbids an Owner inviting an Owner, which is the only way a family acquires a second owner
+> and is behaviour PR-6 already shipped. `<=` is the comparison that actually closes §6.2; an Admin
+> inviting an Admin is lateral, not an escalation.
 
 **Rank on removal** — an Admin may not remove an Owner or another Admin.
 
@@ -233,6 +243,10 @@ Self-promotion, and decapitation of the family in one statement.
 UPDATE/DELETE revoked from `authenticated`. Every change goes through a `SECURITY DEFINER`
 function: `set_family_role()` in PR-9a, `remove_family_access()` and `leave_family()` in PR-9b.
 
+**Shipped in PR-9a**, `20260805090000_roles_and_permission_matrix.sql` §5, asserted by
+`permissions.rls.test.ts` → *hole 1*, which checks both the direct `update` and the direct `delete`
+and confirms afterwards from the victim's own session that nothing moved.
+
 **Why not a tighter policy?** It is expressible —
 `using (can_manage_members(family_id) and role <> 'owner')` plus a `with check` on the new value —
 but it ends as an unreadable expression stating four rules, and it still cannot hold the row lock
@@ -246,8 +260,13 @@ preconditions belong in a definer function, not a policy* (`create_family`, `red
 an Admin creates an owner-role code and redeems it on a second account they control — the same
 escalation through a different door.
 
-**Decision: the invited role is capped by the inviter's rank** (§5.2). Owner may invite any role;
-Admin may invite Member or Guest.
+**Decision: the invited role is capped by the inviter's rank** (§5.2) —
+`role_rank(invited) <= role_rank(inviter)`. Owner may invite any role; Admin may invite Admin,
+Member or Guest, and never Owner. See the correction note in §4.2 for why the cap is `<=` and not
+`<`.
+
+**Shipped in PR-9a**, `20260805090000_roles_and_permission_matrix.sql` §6, asserted by
+`permissions.rls.test.ts` → *hole 2*.
 
 ## 6.3 `families.created_by` is pinned
 
@@ -270,8 +289,15 @@ small `before update` trigger.
 | 3 | **Two owners demote each other concurrently** | **the row lock — nothing else** |
 | 4 | An owner's `auth.users` row is deleted → cascade on `family_users` | backstop trigger |
 | 5 | Transfer implemented as demote-then-promote | one locked function; promote first |
-| 6 | An Admin demotes an Owner | rank check, refused before the guard is reached |
+| 6 | An Admin demotes an Owner | `can_manage_family` — changing a role is Owner-only |
 | 7 | The family is deleted → its access rows cascade to zero owners | **must not** trip the guard |
+
+> **Corrected 2026-08-05, during PR-9a.** Path 6 originally said "rank check". `set_family_role`
+> has **no rank comparison at all**, deliberately. It is gated on `can_manage_family`, so every
+> caller is an Owner and every Owner target is of equal rank — a rank check would refuse every
+> owner-to-owner change *including self-demotion*, making paths 1 and 3 unreachable and the whole
+> guarantee below untestable. What stops an Admin is the Owner gate, not a hierarchy. Rank governs
+> invitations (§6.2) and, in PR-9b, removal.
 
 ## 7.2 Why path 3 needs a lock and a trigger cannot help
 
@@ -288,8 +314,14 @@ already uses on the invitation row.
 **Layer 2 — the check, after the write**, inside the function, so the error is a sentence a person
 can act on rather than a constraint name.
 
-**Layer 3 — a backstop trigger** `after insert or update or delete on family_users for each row`,
-because path 4 goes through no function at all.
+**Layer 3 — a backstop trigger** `after update or delete on family_users for each row`, because
+path 4 goes through no function at all. (`insert` is not in the list as built: an insert can only
+ever add an owner, never remove the last one.)
+
+**As built,** the trigger fires at the end of the `update` statement — that is, *before* layer 2's
+count check runs — so in practice it is the trigger's message that reaches the client on paths 1
+and 3. Both raise the identical sentence, so which one wins is invisible to whoever is holding the
+phone, and layer 2 remains the guarantee if the trigger is ever dropped.
 
 ## 7.3 The trigger's cascade guard — the detail that costs an hour
 
@@ -356,11 +388,17 @@ rejected**: it is developer language and it does not say restricted *to whom*.
 ```
 can_see_record(target_family, record_visibility, subject_member, record_author) → boolean
 
-  'family'   → can_read_records(target_family)
-  'private'  → record_author = auth.uid()
-               OR subject_member is a family_members row whose user_id = auth.uid()
-  anything   → false          -- unknown value fails closed
+  has_family_access(target_family) AND
+    'family'   → can_read_records(target_family)
+    'private'  → record_author = auth.uid()
+                 OR subject_member is a family_members row whose user_id = auth.uid()
+    anything   → false          -- unknown value fails closed
 ```
+
+**The `has_family_access` gate was added during PR-9a and is not optional.** Without it,
+`record_author = auth.uid()` stays true forever, so somebody removed from a family by PR-9b would
+go on reading every private record they had ever written. Access to the tenant is a precondition of
+every branch, not an alternative to them.
 
 Every record table's SELECT policy is exactly:
 
@@ -447,6 +485,10 @@ fails.
 
 A permission matrix that lives only in Markdown is wrong within two phases. This one cannot drift
 without breaking a test.
+
+**It earned that on the first day.** Three of this document's own claims were wrong when checked
+against a running database, and all three are marked in place above. The two that mattered were
+found by trying to write the test, not by re-reading the prose.
 
 ---
 

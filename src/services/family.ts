@@ -13,8 +13,19 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-/** A person's level of access to a family. Widened to four values in PR-9a. */
-export type FamilyRole = 'owner' | 'member';
+/**
+ * A person's level of access to a family.
+ *
+ * Mirrors `family_users_role_check`. A role answers "what may you do *to* the
+ * family"; it deliberately says nothing about what you may *see* inside it —
+ * that is record visibility, a separate axis. Collapsing the two is how a role
+ * model grows a Child role and a Restricted role and an Emergency role and
+ * still fits nobody. See `docs/15-permission-matrix.md` §2.
+ *
+ * Labels, ranking and the permission predicates live in `./role`.
+ */
+export const FAMILY_ROLES = ['owner', 'admin', 'member', 'guest'] as const;
+export type FamilyRole = (typeof FAMILY_ROLES)[number];
 
 export interface Family {
   id: string;

@@ -30,6 +30,13 @@ import {
   listMembers,
   type Member,
 } from '../../../../src/services/member';
+import {
+  canEditPeople,
+  canManageMembers,
+  invitableRoles,
+  ROLE_LABELS,
+  type FamilyRole,
+} from '../../../../src/services/role';
 import { theme } from '../../../../src/theme';
 
 const domain = TAB_DOMAINS.find((entry) => entry.id === 'family')!;
@@ -167,6 +174,12 @@ function FamilyHome({ family }: { family: Family }) {
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Derived from the caller's own role, so an admin is never offered a choice
+  // the database is going to refuse. The cap is enforced in create_invitation
+  // regardless — this only decides what gets drawn.
+  const offerable = invitableRoles(role);
+  const [invitedRole, setInvitedRole] = useState<FamilyRole>('member');
+
   const load = useCallback(async () => {
     const supabase = getSupabase();
     setLoading(true);
@@ -196,6 +209,7 @@ function FamilyHome({ family }: { family: Family }) {
     try {
       const result = await createInvitation(createSupabaseInvitationGateway(getSupabase()), {
         familyId: family.id,
+        role: invitedRole,
       });
       if (!result.ok) {
         setError(result.message);
@@ -241,16 +255,46 @@ function FamilyHome({ family }: { family: Family }) {
           ))
         )}
 
-        <Button
-          label="Add someone"
-          variant="quiet"
-          onPress={() => router.push('/(app)/(tabs)/family/new')}
-        />
+        {/* Hidden rather than disabled for a guest. The database refuses this
+            anyway, and a button that always fails is worse than no button —
+            the same reason the More tab's unbuilt rows are not tappable. */}
+        {canEditPeople(role) && (
+          <Button
+            label="Add someone"
+            variant="quiet"
+            onPress={() => router.push('/(app)/(tabs)/family/new')}
+          />
+        )}
       </View>
 
-      {role === 'owner' && (
+      {canManageMembers(role) && (
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Invite someone</Text>
+
+          <View style={styles.choices}>
+            {offerable.map((option) => {
+              const selected = option === invitedRole;
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => setInvitedRole(option)}
+                  disabled={inviting}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`Invite as ${ROLE_LABELS[option]}`}
+                  style={({ pressed }) => [
+                    styles.choice,
+                    selected && styles.choiceSelected,
+                    pressed && styles.choicePressed,
+                  ]}
+                >
+                  <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
+                    {ROLE_LABELS[option]}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
           {invitations.length === 0 ? (
             <Text style={styles.body}>
@@ -292,7 +336,11 @@ function MemberRow({ member, isYou }: { member: Member; isYou: boolean }) {
   // Account holders and relatives with no login are one list, not two. The
   // difference is a quiet subtitle — a person who never signs in is no less a
   // member of the family.
-  const detail = member.email ? (member.role === 'owner' ? 'Owner' : 'Member') : 'No account';
+  //
+  // Read from the label map rather than a ternary: the ternary this replaces
+  // rendered every admin and every guest as "Member", and would have gone on
+  // doing so silently for every role a later phase adds.
+  const detail = member.role ? ROLE_LABELS[member.role] : 'No account';
 
   return (
     <Pressable
@@ -349,6 +397,35 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.caption,
     color: theme.colors.textMuted,
     textAlign: 'center',
+  },
+  choices: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  choice: {
+    minHeight: theme.touchTarget,
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  choiceSelected: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  choiceText: {
+    fontSize: theme.typography.body,
+    color: theme.colors.text,
+  },
+  choiceTextSelected: {
+    fontWeight: '700',
+    color: theme.colors.primary,
+  },
+  choicePressed: {
+    opacity: 0.7,
   },
   memberRow: {
     flexDirection: 'row',
