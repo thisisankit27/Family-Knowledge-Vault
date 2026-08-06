@@ -15,6 +15,7 @@ Built in public, one pull request per live stream. The full product vision lives
 | Mobile app | React Native via Expo SDK 54 (TypeScript) — iOS + Android from one codebase |
 | Backend | Supabase — Postgres, Auth, Storage, Row-Level Security |
 | Database | PostgreSQL (via Supabase) |
+| Local dev | Supabase CLI stack in Docker — the same services, running on your machine |
 | Tests | Jest (`jest-expo` preset) |
 | CI | GitHub Actions — typecheck + tests |
 
@@ -64,6 +65,91 @@ See [`.env.example`](.env.example). All client-side values are prefixed
 
 ---
 
+## Local Supabase — the standard development environment
+
+From Phase 3 onward, development runs against a **local Supabase stack in
+Docker**: real Postgres, real Auth, real Storage, real Row-Level Security. The
+hosted project is production.
+
+This matters more than saving free-tier quota. The storage security model *is*
+a policy on `storage.objects`, so any setup that fakes storage cannot exercise
+the thing being built. See [`docs/17`](docs/17-storage-architecture-review.md)
+§12 for why a development-only storage provider was proposed and declined.
+
+> **Status, 2026-08-07: decided and documented, not yet run.** Docker is
+> installed and the decision is final, but `supabase start` has not been
+> executed once on this machine, so the steps below are a specification rather
+> than a transcript. Three things are expected to need attention on first run:
+> whether the containers publish on `0.0.0.0` (so the phone can reach them),
+> whether `ufw` blocks 54321–54324, and whether Expo Go accepts cleartext HTTP.
+> This note goes away when the setup has been verified end to end — saying it
+> works before it has is exactly the claim this project has committed not to
+> make.
+
+**One-time setup** (Docker Engine, Ubuntu):
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker $USER   # then log out and back in
+```
+
+**Every session:**
+
+```bash
+npx supabase start        # first run pulls ~4-6GB — do this off-stream
+npx supabase db reset     # apply every migration from scratch
+npx supabase status       # prints the API URL and anon key
+```
+
+`supabase stop` when you're done — the stack shares RAM with Metro and OBS.
+
+### Switching between local and hosted
+
+Expo loads `.env.local` at **higher precedence** than `.env`, and both are
+gitignored. So there is no script and no flag:
+
+| File | Points at |
+|---|---|
+| `.env` | The hosted project |
+| `.env.local` | The local stack |
+
+**Creating `.env.local` switches to local. Renaming it switches back.** The
+hosted project therefore stays one file-rename away if the stack misbehaves
+mid-stream.
+
+> **Use your LAN IP, not `127.0.0.1`.** The app runs in Expo Go on a physical
+> phone, which cannot reach your machine's loopback address. Take the port from
+> `supabase status` but substitute the address `expo start` prints:
+>
+> ```
+> EXPO_PUBLIC_SUPABASE_URL=http://192.168.x.x:54321
+> ```
+>
+> That address is DHCP-assigned and **will change** — a one-line edit when it
+> does, or reserve it on the router.
+
+### What runs where
+
+| | |
+|---|---|
+| **In Docker** | Postgres · Auth (GoTrue) · PostgREST · Realtime · Storage · imgproxy · pg-meta · API gateway · Studio · SMTP catcher |
+| **On the host** | Expo/Metro (8081), Node, Jest, the Supabase CLI |
+| **In the cloud** | Only the hosted project, reached by `db push` when a PR is ready |
+
+Ports: **54321** API · **54322** Postgres · **54323** Studio · **54324** mail.
+Roughly 4–6GB of disk for images and 1.5–2.5GB of RAM. `[analytics]` and
+`[edge_runtime]` are disabled in `supabase/config.toml` — the first is the
+stack's largest RAM consumer and this project has no Edge Functions.
+
+---
+
 ## Scripts
 
 | Command | Purpose |
@@ -71,24 +157,39 @@ See [`.env.example`](.env.example). All client-side values are prefixed
 | `npm start` | Start the Expo dev server |
 | `npm run android` / `npm run ios` | Open on a connected device or emulator |
 | `npm test` | Run the Jest suite (what CI runs) |
-| `npm run test:rls` | Run the Row-Level Security suite against the live database |
+| `npm run test:rls` | Run the Row-Level Security suite against a real database |
 | `npm run typecheck` | Type-check without emitting |
 
-`npm test` deliberately excludes `*.rls.test.ts`: those tests talk to a real
-Supabase project, and CI has no credentials. Run them yourself after any change
-to a migration — they create two throwaway accounts on first run and clean up
-after themselves, so no setup is needed.
+`npm test` deliberately excludes `*.rls.test.ts`: those tests need a real
+Postgres with real policies, and CI has no credentials. Run them yourself after
+any change to a migration — they create two throwaway accounts on first run and
+clean up after themselves, so no setup is needed.
+
+**The RLS suite follows whichever environment the app is using.** `jest.setup.js`
+loads `.env.local` ahead of `.env` for exactly this reason: `dotenv` reads `.env`
+alone, so without it the app would run against the local stack while the RLS
+tests silently created accounts on the *hosted* project. With the local stack
+running, `npm run test:rls` touches nothing in the cloud.
 
 ### Database migrations
 
-Schema lives in `supabase/migrations/` and is applied with the Supabase CLI:
+Schema lives in `supabase/migrations/`. Develop against the local stack, then
+push to the hosted project when the PR is ready:
+
+```bash
+npx supabase db reset                                 # local: rebuild from every migration
+```
 
 ```bash
 cd <repo root>                                        # .temp/ is written relative to cwd
 npx supabase login
 npx supabase link --project-ref <your-project-ref>
-npx supabase db push
+npx supabase db push                                  # hosted: apply what's new
 ```
+
+`db reset` is the inner loop — it drops and rebuilds the local database from
+the full migration history, which is the only way to find out that a migration
+does not apply cleanly from scratch.
 
 Run `link` from the repository root — the CLI writes its link state (including
 a cached database password) relative to the current directory, so running it

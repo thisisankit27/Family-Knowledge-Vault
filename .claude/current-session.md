@@ -1348,3 +1348,147 @@ cannot derive:
 
 Its §9 is a five-item checklist to settle before the first line of PR-11. Three of the five change
 the schema.
+
+> **Superseded 2026-08-07 — read the next section instead.** All five items (plus two the checklist
+> had dropped) are settled, and `docs/16` now carries each resolution inline. The storage decisions
+> no longer "do not exist anywhere in the repo".
+
+---
+---
+
+# Storage Architecture Review + Local Dev Environment (2026-08-07)
+
+**No application code changed. `docs/16` §9 is now fully settled, and development has moved off the
+hosted project.**
+
+## What happened
+
+Before PR-11 started, a proposal arrived to replace Supabase Storage with **user-owned Google
+Drive** — FKV as an intelligence layer over bytes it does not hold, with three AI privacy modes. It
+was reviewed rather than accepted. The full record is **`docs/17-storage-architecture-review.md`**.
+
+**Verdict: Architecture A (Supabase Storage) ships. Architecture C (provider-portable data model) is
+adopted at near-zero cost. Google Drive is declined as a foundation and recorded as a Phase 12
+candidate, sequenced Dropbox/OneDrive first.**
+
+## The three findings that decided it
+
+1. **There is no folder-scoped OAuth for Drive.** `drive.appdata` is a *hidden* folder; `drive.file`
+   is *per-file* and can never see a file the user adds themselves; full `drive` is a **restricted
+   scope** requiring an annual ~$540 CASA assessment. The recovery path — Google Picker — is
+   **web-only, no mobile SDK**.
+2. **Digital Legacy breaks outright.** Files in a personal Drive die with the person. Google deletes
+   accounts after two years of inactivity, Inactive Account Manager is Google's own mechanism FKV
+   cannot audit, and **consumer accounts cannot create Shared Drives** — so the "family folder" is
+   always one mortal individual's. *A vault that dies with the person is not a vault.*
+3. **It breaks the delivery model on day one.** Expo Go cannot do Google OAuth (the same `exp://`
+   redirect problem that already forced invitations away from deep links), there is no server to hold
+   a refresh token, and unverified apps have refresh tokens **expire every 7 days**.
+
+**The reframe worth remembering:** privacy is bought with *encryption*, not storage location — Google
+reads Drive too, so B adds a party rather than removing one. Ownership is bought with *export*.
+Only the cost win was real, and the free tier is escapable for $25/month.
+
+## The three-mode privacy model was restructured
+
+Modes 1 and 2 are a **consent flag**; Mode 3 is an **encryption tier**. They are different kinds of
+thing and are no longer one three-way choice. `ai_processing` ships in PR-11 — retrofitting consent
+in Phase 9 is the backfill bug class this project has already been bitten by.
+
+## `docs/16` §9 — all settled
+
+| Item | Decision |
+|---|---|
+| PR-15 "Sharing" | Within-family only → **PR-15's slot is vacated** |
+| Members per document | Multiple, via `document_members` — **explicitly not permission-bearing** |
+| Archive vs soft delete | Separate columns: `archived_at` and `deleted_at` |
+| Bucket / MIME / size | Private `family-files`; images + PDF; **10MB**; created **by migration**, not `config.toml` |
+| PDF strategy | WebView. **Demo stays on Expo Go**; the dev build moves to Phase 10 |
+| Thumbnails *(dropped from the checklist)* | Deferred — `document_files.kind` reserves the slot |
+| Filename sanitisation *(dropped from the checklist)* | Dissolved: the path segment is a uuid, never user input |
+
+**`docs/15` §9.1 is amended** for the uuid filename (segment 1 unchanged, so `has_family_access` is
+untouched), and **§9.6 is new**: OCR text and embeddings carry their source row's policy, and
+withdrawn consent must *delete* derived artefacts, not merely ignore them.
+
+## Local Supabase is now the standard development environment
+
+A **`LocalStorageProvider`** for dev/testing was proposed and **declined** (`docs/17` §12) — it
+cannot exercise `storage.objects` RLS, which *is* the Phase 3 security model; a self-authored second
+implementation validates nothing; and device-local storage is single-device, which kills the
+multi-account demo.
+
+What replaced it: `npx supabase start` — the **real** Storage and RLS, locally, free.
+
+- `supabase/config.toml`: `[analytics]` and `[edge_runtime]` disabled (RAM; no Edge Functions exist).
+- `jest.setup.js` (new) + `setupFiles` in package.json — loads `.env.local` ahead of `.env`.
+  **Without it the app would run local while the 151 RLS tests silently wrote to hosted.**
+- `.env.local` selects local; renaming it returns to hosted. **The hosted project stays one rename
+  away** if the stack misbehaves mid-stream.
+- **Use the LAN IP, not `127.0.0.1`** — the phone cannot reach loopback. It is DHCP-assigned and
+  will change.
+
+## Open items
+
+- **Export placement** — Phase 3, PR-15's vacated slot, or Phase 10. Deliberately deferred.
+- **Shared vs per-domain file tables** — `document_files` ships now; **Phase 4 must decide before
+  `memory_files` exists.** At two tables it is a rename, at six a rewrite.
+- **Phase 9 vs Phase 11** — one ships bytes to an OCR vendor, the other commits to E2EE the server
+  cannot read. Nobody has written down where the line falls. Predates this review.
+- Key management for the encrypted tier; metadata scope per AI mode; consent when the uploader is
+  not the subject; the features Mode 3 silently disables.
+
+## Deliberate gaps
+
+No application code, no migrations, no `src/` changes. Wiring the RLS suite into CI became *possible*
+once the stack is reproducible — `ci.yml` still never runs those 151 tests — but it was recorded
+rather than bundled.
+
+---
+
+## Environment status at end of session
+
+| Thing | State |
+|---|---|
+| **Docker Engine** | **Installed and verified** — 29.7.2, Compose v5.4.0, daemon `active`, `ankit` is in the `docker` group (gid 970) |
+| **Docker without sudo** | **Works only in a new login session.** The group was added after this shell started, so `docker info` still fails here. A fresh terminal tomorrow fixes it — no reinstall, no further sudo |
+| **Supabase CLI** | 2.111.0, linked to the hosted project |
+| **Local stack** | **Never started.** `supabase start` has not run once |
+| **`.env.local`** | **Does not exist** — it needs the anon key from `supabase status`, which needs the stack up |
+| **`jest.setup.js`** | Done and verified: 312 tests pass, no dotenv noise |
+| **`config.toml`** | `[analytics]` and `[edge_runtime]` disabled |
+| Machine | Ubuntu 26.04, 8 cores, 14GB RAM (~6.5GB free), 130GB disk. Ports 54321–54324 free |
+
+## Next session — start here
+
+**First task: bring up the local stack and prove it, in this order.**
+
+1. New terminal (for the `docker` group), then `docker run hello-world`.
+2. `npx supabase start` — **first run pulls ~4–6GB, so do it before going live.**
+3. `npx supabase db reset` — all ten migrations from scratch.
+4. `npx supabase status` → write `.env.local`, **substituting the LAN IP for `127.0.0.1`.**
+5. `npm test` (312) and `npm run test:rls` (151) — the second should now hit local. Confirm by
+   checking the hosted project gained no throwaway accounts.
+6. Expo Go on the phone. **This is the step most likely to fail** — see risks below.
+7. Rename `.env.local` and confirm the app returns to hosted. **Prove the fallback before relying
+   on it mid-stream.**
+8. Delete the README's "decided and documented, not yet run" status note once all of the above pass.
+
+**Then PR-11**, whose full scope is fixed in `docs/16` §9.1. It needs no further design.
+
+## Risks and assumptions — do not lose these
+
+- **The phone cannot reach `127.0.0.1`.** Use the LAN IP (was `192.168.29.40`). It is DHCP-assigned
+  and **will change**; when uploads suddenly fail, check this first.
+- **Three things are unverified and could each cost stream time:** whether the containers publish on
+  `0.0.0.0`, whether `ufw` blocks 54321–54324, and whether Expo Go accepts cleartext HTTP to a LAN
+  address. Each has a workaround, none has been exercised.
+- **RAM is the real constraint, not disk.** 14GB shared between the stack, Metro, a browser and OBS.
+  `supabase stop` when not developing. If a stream gets tight, that is the first lever.
+- **The hosted project is now production.** `db push` is a deploy, not a dev step.
+- **`storage.buckets` must be created by a migration**, never by `config.toml` — the latter
+  provisions local only, and the divergence surfaces as a failed upload *after* deploy.
+- **`document_members` must never grant visibility.** If it did, any member could link themselves to
+  a private document and read it. Write that into the migration's comments, not just the docs.
+- **The README currently describes a setup that has never been run.** That note is deliberate and
+  should be removed only when the steps above actually pass.

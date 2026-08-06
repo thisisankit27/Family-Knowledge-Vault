@@ -215,6 +215,11 @@ Upload Experience
 
 Document Sharing
 
+> **Amended 2026-08-07 — this slot is vacated.** "Sharing" resolved to two different things:
+> *within* a family is already served by `visibility`, and *between* families has no designed
+> mechanism and is not a 2-hour PR. Per-record ACLs belong to Phase 10. See `docs/16` §6.1 and
+> `docs/17`. Candidates for the slot: the document detail screen, or export.
+
 Visible Progress
 
 Families can safely preserve documents.

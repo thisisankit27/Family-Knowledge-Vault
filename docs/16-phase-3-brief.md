@@ -2,9 +2,12 @@
 
 **Project:** Family Knowledge Vault
 
-**Version:** 1.0
+**Version:** 1.1
 
-**Status:** Written 2026-08-06, at the close of Phase 2, before PR-11 starts.
+**Status:** Written 2026-08-06 at the close of Phase 2. **Amended 2026-08-07: every open decision in
+§9 is now settled** — see `docs/17-storage-architecture-review.md`. The original problem statements
+are kept in place, each followed by its dated resolution, so the reasoning survives alongside the
+answer.
 
 ---
 
@@ -82,7 +85,10 @@ who created an existing row. `public.touch_updated_at()` already exists from PR-
 
 ---
 
-# 3. Storage — decided, and undecided
+# 3. Storage
+
+*As written, this section had one decided item and five open ones. All six are now settled; the
+original framing is preserved below with each resolution appended.*
 
 ## 3.1 Decided (matrix §9.1), and expensive to change later
 
@@ -96,9 +102,14 @@ role-blind — while the *row* policy is `can_see_record`. A private record's fi
 protected by never handing out a URL for it, not by the storage policy. **Anything that mints a
 signed URL must read the row first.**
 
-## 3.2 Undecided, and blocking PR-14 at the latest
+> **Amended 2026-08-06 (`docs/17` §10.3).** The final path segment is now a generated uuid plus
+> extension — `<family_id>/<document_id>/<uuid>.<ext>` — with the user's `original_filename` kept as
+> an ordinary column for display. **Segment 1 is unchanged, so the `has_family_access` predicate
+> above is untouched.** Everything else in §3.1 stands.
 
-Nothing in the repository names any of these. They are the brief's real work:
+## 3.2 Was undecided, and blocking PR-14 at the latest
+
+Nothing in the repository named any of these. They were the brief's real work:
 
 | Decision | Why it matters | Suggested default |
 |---|---|---|
@@ -107,6 +118,21 @@ Nothing in the repository names any of these. They are the brief's real work:
 | **Maximum file size** | The free tier is ~1GB total, for every family | Pick a number and enforce it in the bucket, not just the client |
 | **Thumbnails** | A document list that downloads full-size scans burns the bandwidth cap on scrolling | Consider deferring; note the cost |
 | **Filename sanitisation** | A user-supplied filename becomes part of a storage path | Decide before the first upload lands |
+
+### Decided, 2026-08-06 (during the review recorded in `docs/17`)
+
+| Decision | Settled as |
+|---|---|
+| **Bucket** | One **private** bucket, `family-files` |
+| **MIME allow-list** | `image/jpeg`, `image/png`, `image/heic`, `image/webp`, `application/pdf`. Phase 4 adds audio and video |
+| **Maximum file size** | **10MB per file**, enforced at the bucket *and* validated client-side for a legible error. The arithmetic, stated plainly: 1GB ÷ 10MB ≈ 100 files **across every family**. Honest, not comfortable — Phase 12 is the designated revisit |
+| **Thumbnails** | **Deferred** (Supabase image transformation is Pro-only). The *slot* is created now: `document_files.kind in ('original','thumbnail')`, so adding them later is rows rather than a migration of every file |
+| **Filename sanitisation** | **Dissolved, not solved.** The stored name is never user-supplied — see the §3.1 amendment |
+
+**The bucket is created by the PR-11 migration, not by `config.toml`.** A `[storage.buckets.*]`
+block provisions the *local* stack only; production would be missing it, and the divergence would
+surface as a failed upload after deploy. `insert into storage.buckets (…)` in a migration provisions
+both and travels with `db push` — the append-only migration rule, applied to storage.
 
 ## 3.3 The free-tier ceiling is a real constraint, not a footnote
 
@@ -120,6 +146,12 @@ Phase 3 is the first phase that consumes this. Two consequences worth designing 
 document list should not fetch originals, and the demo account on stream will accumulate files
 across sessions.
 
+> **Amended 2026-08-07.** The second consequence no longer applies. Development moved to a **local
+> Supabase stack in Docker**, so streams, tests and experiments consume none of the hosted free tier
+> — only real users do. The first consequence stands, and now stands on its own merits rather than
+> on quota anxiety: a list that downloads full-size scans is bad on a phone regardless of who pays.
+> See `docs/17` §12.
+
 ---
 
 # 4. The five PRs
@@ -132,7 +164,7 @@ across sessions.
 | **12 Categories** | Identity / Medical / Finance / Property / Education / Legal, per IA §4 | Decide: a column with a check constraint, or a table. A fixed list argues for the column. |
 | **13 Viewer** | Open a document | **Budget over 2h.** See §5 on `react-native-pdf`. |
 | **14 Upload** | Expo ImagePicker / DocumentPicker → Supabase Storage | Where §3.2's decisions come due. NFR-007 requires visible progress. |
-| **15 Sharing** | **Undefined — see §6.1** | Do not start this PR until it means something specific. |
+| **15 Sharing** | **Vacated — see §6.1** | "Sharing" resolved to nothing Phase 3 should build. Slot is open. |
 
 Phase 4 (Memories) and Phase 5 (Medical) both explicitly reuse this phase's upload and CRUD
 patterns, so a shortcut taken here is taken three times.
@@ -154,6 +186,16 @@ So PR-13 has a decision before it has code:
 
 Whichever is chosen, **decide it before the stream starts**, not during PR-13.
 
+### Decided, 2026-08-06: images plus PDF in a WebView. **The demo stays on Expo Go.**
+
+The storage architecture review removed the *other* reason Phase 3 might have needed a dev build —
+Google OAuth is off the table (`docs/17` §4.3) — and PR-1 already rejected EAS builds mid-stream as
+too slow.
+
+**The dev build gets a natural home instead: Phase 10**, where `docs/14` already records that deep
+linking is needed for Emergency Mode grant redemption. One migration, one phase, one decision —
+rather than two half-reasons in Phase 3.
+
 ---
 
 # 6. Contradictions in the existing docs — flag, do not silently resolve
@@ -168,6 +210,15 @@ Whichever is chosen, **decide it before the stream starts**, not during PR-13.
 If PR-15 means the second, it is not a 2-hour PR and it changes the schema. Settle this before
 PR-11, because the answer affects what `documents` carries.
 
+### Decided, 2026-08-06: **within-family only — which leaves PR-15 with nothing to build.**
+
+Within a family is already served by `visibility` on the spine. Per-record ACLs stay in Phase 10,
+where matrix §8.1 makes them one function-body edit. Cross-family sharing stays undesigned and out
+of Phase 3.
+
+**PR-15's slot is therefore vacant.** Candidates: the document detail/edit screen, or the export
+feature (`docs/17` §11). Recorded as open rather than quietly filled.
+
 ## 6.2 A document may relate to *multiple* members
 
 `docs/08` §7: *"A document may relate to: Family / **Multiple Members** / Timeline Events / Medical
@@ -177,6 +228,19 @@ The frozen spine gives one nullable `member_id`. These do not agree. Options are
 (`document_members`), or accepting one primary member for now and recording the gap. **The spine is
 frozen; a join table is additive and does not violate it.** Decide explicitly.
 
+### Decided, 2026-08-06: **multiple — but the extra links are not permission-bearing.**
+
+Both requirements survive:
+
+- **`member_id` on the spine stays the *primary subject*** and remains the only thing
+  `can_see_record(family, visibility, subject, author)` consults. The resolver is unchanged.
+- **A `document_members` join table adds further links, for organisation and filtering only.**
+
+> **This distinction is load-bearing and must be documented at the point the table is created.** If a
+> join-table link granted visibility, any member could link themselves to a private document and read
+> it — a privilege-escalation hole of exactly the kind `docs/15` was written to catch, and a third
+> instance of *"an authorisation rule is rarely a single rank comparison."*
+
 ## 6.3 Archive is not soft delete
 
 FR-014 lists **Archive** as a document action. IA §4 lists **Archived** as a peer of the six
@@ -185,12 +249,29 @@ The spine has only `deleted_at`.
 
 Three different models. Pick one and write it down.
 
+### Decided, 2026-08-06: **they are different columns, and all three models survive.**
+
+- **`deleted_at`** — soft delete. Already in the spine, already filtered by the mandatory SELECT
+  policy. Untouched.
+- **`archived_at`** — new, nullable. Archived rows stay *visible to the policy* and are filtered in
+  the query and the UI, which is what lets "Archived" work as a peer of the six categories in IA §4
+  while remaining an action per FR-014.
+
+Additive to the spine; the mandatory SELECT policy gains nothing.
+
 ## 6.4 Versioning
 
 FR-015: *"Documents shall maintain version history where applicable."* `docs/08` §21 lists documents
 first among entities that should preserve history. Nothing in Phase 3's plan mentions it. Either
 schedule it or record it as deferred — it is the kind of thing that is very expensive to add after
 a thousand files exist.
+
+### Decided, 2026-08-06: **the schema makes room; the feature is deferred.**
+
+`document_files` carries `version` and `kind` from PR-11, so multiple objects per document are
+representable on day one. **No versioning UI ships in Phase 3.** This is the cheap half of the
+expensive problem: the thing that costs money after a thousand files is the *table shape*, not the
+screen.
 
 ---
 
@@ -224,13 +305,42 @@ Run `npm ci && npm run typecheck && npm test` before pushing anything that touch
 
 # 9. Before the first line of PR-11
 
-- [ ] Decide what PR-15 "Sharing" means (§6.1).
-- [ ] Decide single vs multiple members per document (§6.2).
-- [ ] Decide archive vs soft delete (§6.3).
-- [ ] Decide the bucket name, MIME allow-list and size cap (§3.2).
-- [ ] Decide the PDF strategy, and therefore whether the demo stays on Expo Go (§5).
+**All settled 2026-08-06, during the storage architecture review (`docs/17`).**
 
-The first three change the schema. The last two change the stream.
+- [x] Decide what PR-15 "Sharing" means (§6.1) → **within-family only; PR-15's slot is vacated.**
+- [x] Decide single vs multiple members per document (§6.2) → **multiple, via a
+      `document_members` join table that is explicitly *not* permission-bearing.**
+- [x] Decide archive vs soft delete (§6.3) → **separate columns: `archived_at` and `deleted_at`.**
+- [x] Decide the bucket name, MIME allow-list and size cap (§3.2) → **private `family-files`;
+      images + PDF; 10MB.** Created by migration, not `config.toml`.
+- [x] Decide the PDF strategy, and therefore whether the demo stays on Expo Go (§5) → **WebView.
+      The demo stays on Expo Go; the dev build moves to Phase 10.**
+
+**Plus the two items §3.2 listed and this checklist originally dropped:**
+
+- [x] **Thumbnails** → deferred, but `document_files.kind` reserves the slot.
+- [x] **Filename sanitisation** → dissolved: the stored name is a uuid, never user input (§3.1
+      amendment).
+
+The first three changed the schema. The last two changed the stream.
+
+## 9.1 What PR-11 therefore carries
+
+- `documents` — the spine, plus `archived_at` and `ai_processing`.
+- `document_files` — `provider`, `provider_file_id`, `kind`, `version`, `mime_type`, `size_bytes`,
+  `checksum`, `original_filename`. **Named `provider_file_id`, never `storage_path`** — the name is
+  what teaches every future service whether that value is an opaque identifier or a path
+  (`docs/17` §10).
+- `document_members` — the join table, documented as non-permission-bearing.
+- The `family-files` bucket and its `storage.objects` policies, **in the migration**, with a
+  matching `storage.rls.test.ts`.
+- **One `SECURITY DEFINER` function that is the only thing in the system constructing a storage
+  path.** No client ever builds one.
+- `src/services/document.ts` following the existing `XGateway` + `createSupabaseXGateway` shape.
+
+`ai_processing` ships now rather than in Phase 9 deliberately: retrofitting consent onto existing
+rows is the backfill bug class this project has already been bitten by, and Phase 9 is far too late
+to ask a user whether their passport may be read.
 
 ---
 
