@@ -472,6 +472,15 @@ unreachable.** The storage policy checks
 on signed URLs issued only after a successful row read. Decided now because moving files later is
 expensive.
 
+> **Amended 2026-08-06 (`docs/17` §10.3).** The final segment is a generated uuid plus extension —
+> `<family_id>/<document_id>/<uuid>.<ext>` — with the user's `original_filename` kept as an ordinary
+> column for display. This removes user input from the path entirely, which dissolves the
+> filename-sanitisation problem rather than solving it, and matches `docs/10` §13 (*"Context is more
+> valuable than filenames"*).
+>
+> **Segment 1 is unchanged, so the `has_family_access` predicate above is untouched.** This refines
+> the contract; it does not violate it. Everything else in §9.1 stands.
+
 **9.2 Any view over a record table must be `with (security_invoker = true)`** *(Phase 8)*
 Otherwise it executes as its owner and bypasses RLS **entirely**. This is the classic Supabase
 footgun and search is where it will first be reached for.
@@ -487,6 +496,18 @@ in an answer to someone who may not read it.
 **9.5 Activity rows referencing a record inherit that record's visibility** *(PR-10)*
 A feed entry reading *"Ankit added Therapy notes"* leaks a private record through its title. The
 feed is the first place visibility can escape the table it protects.
+
+**9.6 Derived content carries its source row's policy** *(Phase 9, added 2026-08-06)*
+§9.3 says a `tsvector` table built by a trigger is *"a second copy of every record with no RLS on
+it."* **OCR text and embeddings are the same thing, and worse.** Extracted document text is the
+document. An embedding is invertible enough to be treated as content rather than as an opaque index,
+so neither may be stored in a table that merely references `family_id` — both need the same
+`can_see_record` predicate as the row they were derived from.
+
+Two consequences for Phase 9, recorded now because they are cheap here and expensive there. A
+document whose `ai_processing` consent is withdrawn must have its derived artefacts **deleted**, not
+merely ignored — the model does not unlearn. And derived text inherits the *subject's* visibility,
+not the uploader's, since §8.3 already treats `member_id` as the subject.
 
 ---
 
