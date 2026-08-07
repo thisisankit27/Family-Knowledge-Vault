@@ -76,15 +76,21 @@ a policy on `storage.objects`, so any setup that fakes storage cannot exercise
 the thing being built. See [`docs/17`](docs/17-storage-architecture-review.md)
 §12 for why a development-only storage provider was proposed and declined.
 
-> **Status, 2026-08-07: decided and documented, not yet run.** Docker is
-> installed and the decision is final, but `supabase start` has not been
-> executed once on this machine, so the steps below are a specification rather
-> than a transcript. Three things are expected to need attention on first run:
-> whether the containers publish on `0.0.0.0` (so the phone can reach them),
-> whether `ufw` blocks 54321–54324, and whether Expo Go accepts cleartext HTTP.
-> This note goes away when the setup has been verified end to end — saying it
-> works before it has is exactly the claim this project has committed not to
-> make.
+> **Verified end to end on 2026-08-07.** All ten migrations apply from scratch,
+> both suites pass against the local stack, and the app runs on a physical phone
+> over the LAN. Of the three things expected to need attention, two were fine
+> out of the box — the containers publish on `0.0.0.0`, and Expo Go accepts
+> cleartext HTTP to a LAN address. **Only `ufw` needed a rule**, below.
+
+If `ufw` is active, the phone cannot reach the stack until the ports are opened
+to your LAN:
+
+```bash
+sudo ufw allow from 192.168.x.0/24 to any port 54321:54324 proto tcp
+```
+
+Scoped to the local subnet deliberately — these ports should not be reachable
+beyond it.
 
 **One-time setup** (Docker Engine, Ubuntu):
 

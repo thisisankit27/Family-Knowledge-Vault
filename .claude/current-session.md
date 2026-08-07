@@ -1453,36 +1453,41 @@ rather than bundled.
 | **Docker Engine** | **Installed and verified** — 29.7.2, Compose v5.4.0, daemon `active`, `ankit` is in the `docker` group (gid 970) |
 | **Docker without sudo** | **Works only in a new login session.** The group was added after this shell started, so `docker info` still fails here. A fresh terminal tomorrow fixes it — no reinstall, no further sudo |
 | **Supabase CLI** | 2.111.0, linked to the hosted project |
-| **Local stack** | **Never started.** `supabase start` has not run once |
-| **`.env.local`** | **Does not exist** — it needs the anon key from `supabase status`, which needs the stack up |
+| **Local stack** | **Up and verified.** 9 containers; all ten migrations apply from scratch; ports publish on `0.0.0.0` |
+| **`.env.local`** | **Written** — LAN IP + publishable key, gitignored. The `sb_secret_` key is deliberately absent |
+| **Both suites vs local** | **312 + 151 pass.** Confirmed genuinely local: the throwaway accounts land in the local `auth.users`, and hosted gained none |
+| **App on the phone** | **Works** over the LAN in Expo Go |
+| **Hosted fallback** | **Proven** — renaming `.env.local` returns the app to hosted, and back |
 | **`jest.setup.js`** | Done and verified: 312 tests pass, no dotenv noise |
 | **`config.toml`** | `[analytics]` and `[edge_runtime]` disabled |
 | Machine | Ubuntu 26.04, 8 cores, 14GB RAM (~6.5GB free), 130GB disk. Ports 54321–54324 free |
 
 ## Next session — start here
 
-**First task: bring up the local stack and prove it, in this order.**
+**The environment is done. Start PR-11 directly** — its full scope is fixed in `docs/16` §9.1 and
+needs no further design.
 
-1. New terminal (for the `docker` group), then `docker run hello-world`.
-2. `npx supabase start` — **first run pulls ~4–6GB, so do it before going live.**
-3. `npx supabase db reset` — all ten migrations from scratch.
-4. `npx supabase status` → write `.env.local`, **substituting the LAN IP for `127.0.0.1`.**
-5. `npm test` (312) and `npm run test:rls` (151) — the second should now hit local. Confirm by
-   checking the hosted project gained no throwaway accounts.
-6. Expo Go on the phone. **This is the step most likely to fail** — see risks below.
-7. Rename `.env.local` and confirm the app returns to hosted. **Prove the fallback before relying
-   on it mid-stream.**
-8. Delete the README's "decided and documented, not yet run" status note once all of the above pass.
+Before going live, only:
 
-**Then PR-11**, whose full scope is fixed in `docs/16` §9.1. It needs no further design.
+1. `npx supabase start` (fast now — images are cached) and confirm the LAN IP still matches
+   `.env.local`. It is DHCP-assigned; a router reboot changes it.
+2. `npm test` as a smoke check.
+
+**Of the three risks flagged before first run, two were non-issues** — the containers publish on
+`0.0.0.0` and Expo Go accepts cleartext HTTP to a LAN address. **Only `ufw` needed a rule**, now
+recorded in the README:
+
+```
+sudo ufw allow from 192.168.x.0/24 to any port 54321:54324 proto tcp
+```
 
 ## Risks and assumptions — do not lose these
 
 - **The phone cannot reach `127.0.0.1`.** Use the LAN IP (was `192.168.29.40`). It is DHCP-assigned
   and **will change**; when uploads suddenly fail, check this first.
-- **Three things are unverified and could each cost stream time:** whether the containers publish on
-  `0.0.0.0`, whether `ufw` blocks 54321–54324, and whether Expo Go accepts cleartext HTTP to a LAN
-  address. Each has a workaround, none has been exercised.
+- **`ufw` is active and blocks the stack by default.** The allow rule above is scoped to the LAN
+  subnet, so it does not survive a change of network range. This was the only one of the three
+  predicted first-run problems that turned out to be real.
 - **RAM is the real constraint, not disk.** 14GB shared between the stack, Metro, a browser and OBS.
   `supabase stop` when not developing. If a stream gets tight, that is the first lever.
 - **The hosted project is now production.** `db push` is a deploy, not a dev step.
@@ -1490,5 +1495,6 @@ rather than bundled.
   provisions local only, and the divergence surfaces as a failed upload *after* deploy.
 - **`document_members` must never grant visibility.** If it did, any member could link themselves to
   a private document and read it. Write that into the migration's comments, not just the docs.
-- **The README currently describes a setup that has never been run.** That note is deliberate and
-  should be removed only when the steps above actually pass.
+- **`supabase status` also prints an `sb_secret_` service-role key.** It is deliberately absent from
+  `.env.local`, with a comment saying so. It bypasses RLS, and the risk is the habit, not this
+  database.
