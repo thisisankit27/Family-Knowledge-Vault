@@ -7,6 +7,8 @@ import {
   canEditPeople,
   canManageFamily,
   canManageMembers,
+  canReadRecords,
+  canWriteRecords,
   describeRoleError,
   invitableRoles,
   isFamilyRole,
@@ -79,6 +81,19 @@ describe('the permission predicates', () => {
     expect(canChangeRoles(role)).toBe(changeRoles);
   });
 
+  it.each([
+    ['owner', true, true],
+    ['admin', true, true],
+    ['member', true, true],
+    ['guest', false, false],
+  ] as const)('%s and records', (role, read, write) => {
+    // Mirrors the SQL can_read_records / can_write_records. A Guest is excluded
+    // from both, which is the whole of matrix §4.5's record row — and the
+    // reason the documents policies name no role at all.
+    expect(canReadRecords(role)).toBe(read);
+    expect(canWriteRecords(role)).toBe(write);
+  });
+
   it('refuses everything when the role is unknown', () => {
     // FamilyProvider returns null both for "no access" and for a failed read.
     // Guessing a role on a failed read is the dangerous direction to guess in —
@@ -87,6 +102,8 @@ describe('the permission predicates', () => {
     expect(canManageMembers(null)).toBe(false);
     expect(canEditPeople(null)).toBe(false);
     expect(canChangeRoles(null)).toBe(false);
+    expect(canReadRecords(null)).toBe(false);
+    expect(canWriteRecords(null)).toBe(false);
   });
 });
 
