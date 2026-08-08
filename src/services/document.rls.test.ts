@@ -88,12 +88,13 @@ if (!configured) {
 interface DocumentRow {
   id: string;
   title: string;
+  category: string;
   visibility: string;
   archived_at: string | null;
   ai_processing: string;
 }
 
-const COLUMNS = 'id, title, visibility, archived_at, ai_processing';
+const COLUMNS = 'id, title, category, visibility, archived_at, ai_processing';
 
 describeRls('documents', () => {
   let owner: SupabaseClient;
@@ -116,7 +117,12 @@ describeRls('documents', () => {
   async function file(
     client: SupabaseClient,
     authorId: string,
-    fields: { title: string; visibility?: string; member_id?: string | null },
+    fields: {
+      title: string;
+      category?: string;
+      visibility?: string;
+      member_id?: string | null;
+    },
   ): Promise<DocumentRow> {
     const { data, error } = await client
       .from('documents')
@@ -124,6 +130,7 @@ describeRls('documents', () => {
         family_id: familyId,
         created_by: authorId,
         visibility: 'family',
+        category: 'identity',
         ...fields,
       })
       .select(COLUMNS)
@@ -198,6 +205,7 @@ describeRls('documents', () => {
       const { error } = await outsider.from('documents').insert({
         family_id: familyId,
         title: 'Injected',
+        category: 'identity',
         created_by: ownerId,
       });
 
@@ -262,6 +270,7 @@ describeRls('documents', () => {
       const { error } = await guest.from('documents').insert({
         family_id: familyId,
         title: 'Guest note',
+        category: 'identity',
         created_by: ownerId,
       });
 
@@ -346,6 +355,7 @@ describeRls('documents', () => {
       const { error } = await member.from('documents').insert({
         family_id: familyId,
         title: 'Filed as the owner',
+        category: 'identity',
         created_by: ownerId,
       });
 
@@ -404,11 +414,78 @@ describeRls('documents', () => {
       const { error } = await owner.from('documents').insert({
         family_id: familyId,
         title: 'Passport',
+        category: 'identity',
         created_by: ownerId,
         ai_processing: 'sometimes',
       });
 
       expect(error).not.toBeNull();
+    });
+  });
+
+  describe('categories', () => {
+    it('refuses a document with no category', async () => {
+      // The column is `not null` — there is no uncategorised shelf, and the
+      // service check is a courtesy on top of this, not a substitute for it.
+      const { error } = await owner.from('documents').insert({
+        family_id: familyId,
+        title: 'Unfiled',
+        created_by: ownerId,
+      });
+
+      expect(error).not.toBeNull();
+    });
+
+    it('refuses a value outside the six', async () => {
+      const { error } = await owner.from('documents').insert({
+        family_id: familyId,
+        title: 'Old lease',
+        category: 'archived',
+        created_by: ownerId,
+      });
+
+      // 'archived' is the tempting wrong value: the information architecture
+      // lists it beside the six, but it is a timestamp on the row.
+      expect(error).not.toBeNull();
+    });
+
+    it('accepts each of the six', async () => {
+      for (const category of [
+        'identity',
+        'medical',
+        'finance',
+        'property',
+        'education',
+        'legal',
+      ]) {
+        const row = await file(owner, ownerId, { title: `A ${category} paper`, category });
+        expect(row.category).toBe(category);
+      }
+    });
+
+    it('lets a member re-file a document onto another shelf', async () => {
+      await inviteAndJoin(member, 'member');
+      const doc = await file(owner, ownerId, { title: 'Insurance', category: 'finance' });
+
+      const { error } = await member
+        .from('documents')
+        .update({ category: 'medical' })
+        .eq('id', doc.id);
+
+      expect(error).toBeNull();
+      const rows = await read(owner);
+      expect(rows.find((row) => row.id === doc.id)?.category).toBe('medical');
+    });
+
+    it('stops a guest re-filing anything', async () => {
+      await inviteAndJoin(guest, 'guest');
+      const doc = await file(owner, ownerId, { title: 'Insurance', category: 'finance' });
+
+      // Matches no visible row, so it changes nothing rather than erroring.
+      await guest.from('documents').update({ category: 'medical' }).eq('id', doc.id);
+
+      const rows = await read(owner);
+      expect(rows.find((row) => row.id === doc.id)?.category).toBe('finance');
     });
   });
 

@@ -1,16 +1,24 @@
 import {
   AI_PROCESSING_MODES,
+  CATEGORY_HINTS,
+  CATEGORY_LABELS,
+  DOCUMENT_CATEGORIES,
   DOCUMENT_VISIBILITIES,
   MAX_DOCUMENT_TITLE_LENGTH,
+  countByCategory,
   createDocument,
   deleteDocument,
   describeDocumentError,
   describeDocumentSubject,
+  filterByCategory,
+  isDocumentCategory,
   listDocuments,
   partitionDocuments,
   setDocumentArchived,
+  setDocumentCategory,
   validateDocumentTitle,
   type CreateDocumentInput,
+  type DocumentCategory,
   type DocumentGateway,
   type FamilyDocument,
 } from './document';
@@ -19,6 +27,7 @@ function document(overrides: Partial<FamilyDocument> = {}): FamilyDocument {
   return {
     id: 'doc-1',
     title: "Dad's Passport",
+    category: 'identity',
     memberId: 'p-dad',
     visibility: 'family',
     archivedAt: null,
@@ -37,7 +46,10 @@ function fakeGateway(overrides: Partial<DocumentGateway> = {}): DocumentGateway 
       return { data: [], error: null };
     },
     async createDocument(input) {
-      return { data: document({ title: input.title }), error: null };
+      return { data: document({ title: input.title, category: input.category }), error: null };
+    },
+    async setCategory() {
+      return { error: null };
     },
     async archiveDocument() {
       return { error: null };
@@ -138,7 +150,7 @@ describe('createDocument', () => {
     const createDocumentSpy = jest.fn();
     const gateway = fakeGateway({ createDocument: createDocumentSpy });
 
-    const result = await createDocument(gateway, { familyId: 'fam-1', title: '   ' });
+    const result = await createDocument(gateway, { familyId: 'fam-1', title: '   ', category: 'identity' });
 
     expect(result).toEqual({ ok: false, message: 'Give this document a name.' });
     expect(createDocumentSpy).not.toHaveBeenCalled();
@@ -149,11 +161,11 @@ describe('createDocument', () => {
     const gateway = fakeGateway({
       async createDocument(input) {
         received = input;
-        return { data: document({ title: input.title }), error: null };
+        return { data: document({ title: input.title, category: input.category }), error: null };
       },
     });
 
-    await createDocument(gateway, { familyId: 'fam-1', title: "  Nani's Aadhaar  " });
+    await createDocument(gateway, { familyId: 'fam-1', title: "  Nani's Aadhaar  ", category: 'identity' });
 
     expect(received!.title).toBe("Nani's Aadhaar");
   });
@@ -167,7 +179,7 @@ describe('createDocument', () => {
       },
     });
 
-    const result = await createDocument(gateway, { familyId: 'fam-1', title: 'Deed' });
+    const result = await createDocument(gateway, { familyId: 'fam-1', title: 'Deed', category: 'property' });
 
     expect(result).toEqual({ ok: false, message: 'The document was not filed. Please try again.' });
   });
@@ -184,7 +196,7 @@ describe('createDocument', () => {
       },
     });
 
-    await createDocument(gateway, { familyId: 'fam-1', title: 'Deed' });
+    await createDocument(gateway, { familyId: 'fam-1', title: 'Deed', category: 'property' });
 
     expect(received!.visibility).toBeUndefined();
     expect(received!.aiProcessing).toBeUndefined();
@@ -274,6 +286,163 @@ describe('describeDocumentSubject', () => {
     // showing, and neither may render as "undefined".
     const described = describeDocumentSubject(document({ memberId: 'p-ghost' }), people);
     expect(described).toBe('Someone in this family');
+  });
+});
+
+describe('categories', () => {
+  it('is the six shelves the check constraint allows, in the IA order', () => {
+    // Not alphabetical, and not arbitrary: this is the order the filter row
+    // renders, taken from docs/06 §4. A seventh value is a migration, not a
+    // convenience — which is the point of a check constraint over a table.
+    expect(DOCUMENT_CATEGORIES).toEqual([
+      'identity',
+      'medical',
+      'finance',
+      'property',
+      'education',
+      'legal',
+    ]);
+  });
+
+  it('never includes Archived, which is a different axis', () => {
+    // IA §4 lists "Archived" beside the six. It is a timestamp on the row, and
+    // making it a category would force a document to stop being Medical the
+    // moment it was filed away.
+    expect(DOCUMENT_CATEGORIES).not.toContain('archived');
+  });
+
+  it('has a label and a hint for every category', () => {
+    for (const category of DOCUMENT_CATEGORIES) {
+      expect(CATEGORY_LABELS[category]).toBeTruthy();
+      expect(CATEGORY_HINTS[category]).toBeTruthy();
+    }
+  });
+
+  it('accepts the six and rejects everything else', () => {
+    for (const category of DOCUMENT_CATEGORIES) expect(isDocumentCategory(category)).toBe(true);
+    expect(isDocumentCategory('archived')).toBe(false);
+    expect(isDocumentCategory('Identity')).toBe(false);
+    expect(isDocumentCategory(null)).toBe(false);
+    expect(isDocumentCategory(3)).toBe(false);
+  });
+});
+
+describe('createDocument and categories', () => {
+  it('refuses a category outside the vocabulary without calling the gateway', async () => {
+    const createDocumentSpy = jest.fn();
+    const gateway = fakeGateway({ createDocument: createDocumentSpy });
+
+    const result = await createDocument(gateway, {
+      familyId: 'fam-1',
+      title: 'Passport',
+      category: 'archived' as DocumentCategory,
+    });
+
+    expect(result).toEqual({ ok: false, message: 'Choose where this belongs.' });
+    expect(createDocumentSpy).not.toHaveBeenCalled();
+  });
+
+  it('passes the chosen category through', async () => {
+    let received: DocumentCategory | null = null;
+    const gateway = fakeGateway({
+      async createDocument(input) {
+        received = input.category;
+        return { data: document({ category: input.category }), error: null };
+      },
+    });
+
+    await createDocument(gateway, { familyId: 'fam-1', title: 'Deed', category: 'property' });
+
+    expect(received).toBe('property');
+  });
+
+  it('checks the title before the category, so the first problem is the one reported', async () => {
+    const result = await createDocument(fakeGateway(), {
+      familyId: 'fam-1',
+      title: '',
+      category: 'nonsense' as DocumentCategory,
+    });
+
+    expect(result).toEqual({ ok: false, message: 'Give this document a name.' });
+  });
+});
+
+describe('setDocumentCategory', () => {
+  it('re-files a document', async () => {
+    let received: DocumentCategory | null = null;
+    const gateway = fakeGateway({
+      async setCategory(_id, category) {
+        received = category;
+        return { error: null };
+      },
+    });
+
+    expect(await setDocumentCategory(gateway, 'doc-1', 'legal')).toEqual({ ok: true });
+    expect(received).toBe('legal');
+  });
+
+  it('refuses an unknown category without calling the gateway', async () => {
+    const setCategorySpy = jest.fn();
+    const gateway = fakeGateway({ setCategory: setCategorySpy });
+
+    const result = await setDocumentCategory(gateway, 'doc-1', 'archived' as DocumentCategory);
+
+    expect(result).toEqual({ ok: false, message: 'That is not a category.' });
+    expect(setCategorySpy).not.toHaveBeenCalled();
+  });
+
+  it('translates a refusal', async () => {
+    const gateway = fakeGateway({
+      async setCategory() {
+        return { error: { message: 'new row violates row-level security policy' } };
+      },
+    });
+
+    expect(await setDocumentCategory(gateway, 'doc-1', 'legal')).toEqual({
+      ok: false,
+      message: 'You do not have permission to do that.',
+    });
+  });
+});
+
+describe('filterByCategory', () => {
+  const passport = document({ id: 'a', category: 'identity' });
+  const report = document({ id: 'b', category: 'medical' });
+  const deed = document({ id: 'c', category: 'property' });
+
+  it('returns everything when no category is chosen', () => {
+    expect(filterByCategory([passport, report, deed], null)).toEqual([passport, report, deed]);
+  });
+
+  it('narrows to one shelf, preserving order', () => {
+    expect(filterByCategory([passport, report, deed], 'medical')).toEqual([report]);
+  });
+
+  it('returns nothing for a shelf with nothing on it', () => {
+    expect(filterByCategory([passport, report, deed], 'legal')).toEqual([]);
+  });
+});
+
+describe('countByCategory', () => {
+  it('counts every category, including the empty ones', () => {
+    // Zero-filled so a filter row can render all six without the caller
+    // guarding each lookup.
+    const counts = countByCategory([document({ category: 'identity' })]);
+
+    expect(counts.identity).toBe(1);
+    expect(counts.legal).toBe(0);
+    expect(Object.keys(counts).sort()).toEqual([...DOCUMENT_CATEGORIES].sort());
+  });
+
+  it('excludes archived documents', () => {
+    // The count and the list it labels must be the same set. A row reading
+    // "Medical 3" that filters to an empty list is a lie the user can see.
+    const counts = countByCategory([
+      document({ id: 'a', category: 'medical' }),
+      document({ id: 'b', category: 'medical', archivedAt: '2026-08-01T00:00:00.000Z' }),
+    ]);
+
+    expect(counts.medical).toBe(1);
   });
 });
 
