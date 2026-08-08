@@ -36,9 +36,67 @@ export type AiProcessing = (typeof AI_PROCESSING_MODES)[number];
 export const DOCUMENT_VISIBILITIES = ['family', 'private'] as const;
 export type DocumentVisibility = (typeof DOCUMENT_VISIBILITIES)[number];
 
+/**
+ * The six shelves, from `docs/06-information-architecture.md` §4.
+ *
+ * Product vocabulary, identical for every household — which is why it is a
+ * check constraint rather than a table a family owns rows in. The open,
+ * user-chosen axis is tags (`docs/08` §16), not this.
+ *
+ * Order is the order they appear in the filter row, and it is the IA's order
+ * rather than alphabetical: Identity first because it is what a family reaches
+ * for most, Legal last because it is the rarest.
+ *
+ * "Archived" is deliberately absent. It is a timestamp on the row, not a shelf
+ * — a document can be Medical *and* archived, and making them exclusive would
+ * lose its meaning the moment it was filed away.
+ */
+export const DOCUMENT_CATEGORIES = [
+  'identity',
+  'medical',
+  'finance',
+  'property',
+  'education',
+  'legal',
+] as const;
+
+export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
+
+export const CATEGORY_LABELS: Record<DocumentCategory, string> = {
+  identity: 'Identity',
+  medical: 'Medical',
+  finance: 'Finance',
+  property: 'Property',
+  education: 'Education',
+  legal: 'Legal',
+};
+
+/**
+ * What belongs on each shelf, in the words a family would use.
+ *
+ * These are examples rather than definitions on purpose: the six are broad, the
+ * boundaries are fuzzy, and somebody deciding where an insurance policy goes is
+ * better served by "policies, statements, tax papers" than by a rule.
+ */
+export const CATEGORY_HINTS: Record<DocumentCategory, string> = {
+  identity: 'Passports, Aadhaar, PAN, licences, birth certificates',
+  medical: 'Reports, prescriptions, vaccination records, insurance',
+  finance: 'Bank statements, policies, tax papers, investments',
+  property: 'Deeds, agreements, tax receipts, utility connections',
+  education: 'Certificates, mark sheets, degrees, admission papers',
+  legal: 'Wills, contracts, affidavits, court papers',
+};
+
+export function isDocumentCategory(value: unknown): value is DocumentCategory {
+  return (
+    typeof value === 'string' && (DOCUMENT_CATEGORIES as readonly string[]).includes(value)
+  );
+}
+
 export interface FamilyDocument {
   id: string;
   title: string;
+  category: DocumentCategory;
   memberId: string | null;
   visibility: DocumentVisibility;
   archivedAt: string | null;
@@ -51,6 +109,8 @@ export interface FamilyDocument {
 export interface CreateDocumentInput {
   familyId: string;
   title: string;
+  /** Required. The column is `not null`; there is no "uncategorised" shelf. */
+  category: DocumentCategory;
   /** The person it is about. Null means it belongs to the household. */
   memberId?: string | null;
   visibility?: DocumentVisibility;
@@ -60,6 +120,10 @@ export interface CreateDocumentInput {
 export interface DocumentGateway {
   listDocuments(familyId: string): Promise<GatewayResult<FamilyDocument[]>>;
   createDocument(input: CreateDocumentInput): Promise<GatewayResult<FamilyDocument>>;
+  setCategory(
+    documentId: string,
+    category: DocumentCategory,
+  ): Promise<{ error: { message: string } | null }>;
   archiveDocument(documentId: string, archived: boolean): Promise<{ error: { message: string } | null }>;
   deleteDocument(documentId: string): Promise<{ error: { message: string } | null }>;
 }
@@ -108,6 +172,14 @@ export function describeDocumentError(message: string): string {
   if (normalised.includes('documents_visibility_check')) {
     return 'That visibility setting is not recognised.';
   }
+  if (normalised.includes('documents_category_check')) {
+    return 'That is not a category.';
+  }
+  if (normalised.includes('null value in column "category"')) {
+    // The constraint speaking, not the service check above — reachable only if
+    // a caller bypassed createDocument.
+    return 'Choose where this belongs.';
+  }
   if (normalised.includes('documents_member_id_family_id_fkey')) {
     // The subject was removed from the family between opening the form and
     // submitting it. Naming the person would be a guess; naming the cause is not.
@@ -144,6 +216,13 @@ export async function createDocument(
 ): Promise<DocumentOutcome> {
   const invalid = validateDocumentTitle(input.title);
   if (invalid) return { ok: false, message: invalid.message };
+
+  // Checked here as well as by the constraint, because the two failures read
+  // very differently to whoever is holding the phone: this one names the thing
+  // they forgot, the constraint names a column.
+  if (!isDocumentCategory(input.category)) {
+    return { ok: false, message: 'Choose where this belongs.' };
+  }
 
   const { data, error } = await gateway.createDocument({
     ...input,
@@ -185,6 +264,65 @@ export async function deleteDocument(
   return { ok: true };
 }
 
+/**
+ * Re-file a document onto a different shelf.
+ *
+ * Separate from archiving for the same reason archive is separate from delete:
+ * a caller should not be able to reach one by passing a flag to the other.
+ */
+export async function setDocumentCategory(
+  gateway: DocumentGateway,
+  documentId: string,
+  category: DocumentCategory,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!isDocumentCategory(category)) {
+    return { ok: false, message: 'That is not a category.' };
+  }
+
+  const { error } = await gateway.setCategory(documentId, category);
+  if (error) return { ok: false, message: describeDocumentError(error.message) };
+  return { ok: true };
+}
+
+/**
+ * Narrow a list to one shelf. `null` means "All" and returns everything.
+ *
+ * A pure function over a list the screen already holds, rather than a second
+ * query. The whole family's documents are fetched once for the active/archived
+ * split; filtering in memory keeps one round trip and one source of truth. When
+ * a family has enough documents for that to be the wrong trade, this moves into
+ * the query and takes an index with it.
+ */
+export function filterByCategory(
+  documents: FamilyDocument[],
+  category: DocumentCategory | null,
+): FamilyDocument[] {
+  if (!category) return documents;
+  return documents.filter((document) => document.category === category);
+}
+
+/**
+ * How many live documents sit on each shelf.
+ *
+ * Counts exclude archived rows so a filter row cannot advertise "Medical 3"
+ * and then show an empty list — the count and the thing it counts must be the
+ * same set.
+ */
+export function countByCategory(
+  documents: FamilyDocument[],
+): Record<DocumentCategory, number> {
+  const counts = Object.fromEntries(
+    DOCUMENT_CATEGORIES.map((category) => [category, 0]),
+  ) as Record<DocumentCategory, number>;
+
+  for (const document of documents) {
+    if (document.archivedAt) continue;
+    counts[document.category] += 1;
+  }
+
+  return counts;
+}
+
 /** Active and archived, in one pass, order preserved. */
 export function partitionDocuments(documents: FamilyDocument[]): {
   active: FamilyDocument[];
@@ -219,6 +357,7 @@ export function describeDocumentSubject(
 interface DocumentRow {
   id: string;
   title: string;
+  category: DocumentCategory;
   member_id: string | null;
   visibility: DocumentVisibility;
   archived_at: string | null;
@@ -232,6 +371,7 @@ function toDocument(row: DocumentRow): FamilyDocument {
   return {
     id: row.id,
     title: row.title,
+    category: row.category,
     memberId: row.member_id,
     visibility: row.visibility,
     archivedAt: row.archived_at,
@@ -243,7 +383,7 @@ function toDocument(row: DocumentRow): FamilyDocument {
 }
 
 const DOCUMENT_COLUMNS =
-  'id, title, member_id, visibility, archived_at, ai_processing, created_by, created_at, updated_at';
+  'id, title, category, member_id, visibility, archived_at, ai_processing, created_by, created_at, updated_at';
 
 /** The only place that knows how documents are stored. */
 export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentGateway {
@@ -262,7 +402,7 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
       return { data: data ? data.map(toDocument) : null, error };
     },
 
-    async createDocument({ familyId, title, memberId, visibility, aiProcessing }) {
+    async createDocument({ familyId, title, category, memberId, visibility, aiProcessing }) {
       // `created_by` is sent explicitly because the INSERT policy requires it
       // to equal auth.uid() — the database will not infer it, and a default
       // would let a client file a document in somebody else's name.
@@ -273,6 +413,7 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
         .insert({
           family_id: familyId,
           title,
+          category,
           member_id: memberId ?? null,
           visibility: visibility ?? 'family',
           ai_processing: aiProcessing ?? 'denied',
@@ -282,6 +423,15 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
         .maybeSingle<DocumentRow>();
 
       return { data: data ? toDocument(data) : null, error };
+    },
+
+    async setCategory(documentId, category) {
+      const { error } = await client
+        .from('documents')
+        .update({ category })
+        .eq('id', documentId);
+
+      return { error };
     },
 
     async archiveDocument(documentId, archived) {
