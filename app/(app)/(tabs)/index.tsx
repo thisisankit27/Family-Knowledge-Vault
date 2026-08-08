@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { EmptyState } from '../../../src/components/EmptyState';
+import { LockedNotice } from '../../../src/components/LockedNotice';
 import { Screen } from '../../../src/components/Screen';
 import { formatRelativeTime } from '../../../src/lib/relativeTime';
 import { getSupabase } from '../../../src/lib/supabase';
@@ -20,6 +21,7 @@ import {
   listMembers,
   type Member,
 } from '../../../src/services/member';
+import { canReadRecords } from '../../../src/services/role';
 import { theme } from '../../../src/theme';
 
 /**
@@ -33,7 +35,7 @@ import { theme } from '../../../src/theme';
  */
 export default function DashboardScreen() {
   const { session } = useAuth();
-  const { family } = useFamily();
+  const { family, role } = useFamily();
   const name = session?.user.email?.split('@')[0] ?? 'there';
 
   return (
@@ -53,7 +55,15 @@ export default function DashboardScreen() {
         />
       )}
 
-      {!!family && <ActivityCard familyId={family.id} viewerUserId={session?.user.id ?? null} />}
+      {!!family &&
+        (canReadRecords(role) ? (
+          <ActivityCard familyId={family.id} viewerUserId={session?.user.id ?? null} />
+        ) : (
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Recent activity</Text>
+            <LockedNotice body="The family's history is not shared with guests." />
+          </View>
+        ))}
 
       <View style={styles.card}>
         <Text style={styles.cardLabel}>What this screen will show</Text>
@@ -108,10 +118,13 @@ function ActivityCard({
     }, [load]),
   );
 
-  // A guest reads nothing here — the policy is one `can_see_record` call, and
-  // 'family' visibility delegates to `can_read_records`, which excludes them.
-  // They get the empty copy below rather than an error, which is the truth from
-  // where they are standing.
+  // This card is only rendered for a reader who passes `canReadRecords`, so the
+  // empty copy below now means what it says: nothing has happened yet.
+  //
+  // PR-10 originally let a Guest fall through to that copy, reasoning it was
+  // "the truth from where they are standing". It was not — the family's history
+  // exists, and telling a Guest otherwise is a claim about somebody else's data.
+  // Reversed in PR-11, once the same shape appeared in the document list.
   const lines = events
     .map((event) => ({
       id: event.id,

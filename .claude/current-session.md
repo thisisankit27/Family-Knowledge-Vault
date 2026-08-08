@@ -1498,3 +1498,92 @@ sudo ufw allow from 192.168.x.0/24 to any port 54321:54324 proto tcp
 - **`supabase status` also prints an `sb_secret_` service-role key.** It is deliberately absent from
   `.env.local`, with a comment saying so. It bypasses RLS, and the risk is the habit, not this
   database.
+
+---
+---
+
+# PR-11 Complete — Document Library (2026-08-08)
+
+**The first record table. Phase 3 has begun.** 350 CI tests (+38), 173 RLS tests (+22), eleven
+migrations. Demoed on a physical phone against the local stack.
+
+## What shipped
+
+A `documents` tab that files, lists, archives, restores and deletes — end to end, with nothing
+reachable only by tests.
+
+**Three tables, and the split is the decision worth remembering:**
+
+| Table | Holds |
+|---|---|
+| `documents` | The record — the §8.2 spine plus `archived_at` and `ai_processing` |
+| `document_files` | The bytes. **Empty until PR-14**; its *shape* is the expensive part |
+| `document_members` | Additional subjects, for filtering — **explicitly not permission-bearing** |
+
+A `storage_path text` column on `documents` was the obvious shorter design and was rejected: it
+cannot express one document with several files (`docs/08` §15), and it bakes one provider's
+addressing into the record. Splitting a column into a table after a thousand files exist is a data
+migration plus a rewrite of every query; doing it while both tables are empty costs nothing.
+
+## The lesson this PR actually taught: RLS filters, it does not error
+
+Assumed twice, wrong twice, in one session:
+
+1. **A Guest's read.** I expected `permission denied`. A Guest holds the `select` grant, so the read
+   *succeeds* and returns zero rows — byte-identical to a family that owns nothing. The screen
+   showed "Nothing filed yet", which is a false claim about somebody else's data. **No screen can
+   distinguish empty from forbidden by looking at the result**; it must ask `canReadRecords(role)`.
+   That is what `src/components/LockedNotice.tsx` exists for.
+2. **A delete that matches no visible row.** It reports success having changed nothing, so "no error"
+   proves nothing. Every RLS write test asserts twice — what the attacker got back, *and* what the
+   victim can still see.
+
+**This reversed a PR-10 decision.** The dashboard deliberately let a Guest see "Nothing has happened
+yet"; the old comment called it "the truth from where they are standing". It was not — the history
+exists. Both screens now show a lock, and the reversal is recorded in the code rather than silently
+applied.
+
+## A test caught me being wrong
+
+I asserted an Owner could delete a private document they cannot read. The DELETE policy gates on
+`can_see_record` *first*, so they cannot. The policy is right and stricter than I assumed; the
+assertion changed, not the policy. The Owner's real escape hatch is deleting the family, which
+cascades and is auditable in a way a silent single-row delete is not.
+
+## Decisions worth not relitigating
+
+- **`ai_processing` defaults to `'denied'`.** Consent never given is not consent, and Phase 9 must
+  not read documents filed before anybody was asked. It ships now because retrofitting consent means
+  backfilling a value on behalf of every existing row — the PR-7 defect exactly.
+- **`archived_at` and `deleted_at` are different columns.** Archive is reversible, delete is not;
+  one column would make them the same act.
+- **The provider column carries a single-value check constraint.** It makes adding a second provider
+  a deliberate migration rather than an accidental insert.
+- **The policies name no role.** The SELECT policy is the frozen §8.2 expression. Guest exclusion
+  falls out of PR-9a's resolver — the payoff for shipping it early.
+
+## Deliberate gaps
+
+- **`documents.deleted_at` exists and nothing sets it.** Soft delete needs a restore screen to mean
+  anything. Delete is currently hard, offered on archived documents only, behind a confirmation.
+- **`document_files` has no INSERT policy or grant** — PR-14 adds both with the upload flow that
+  allocates the path. A client that could describe bytes before they exist would leave the catalog
+  claiming files nobody can fetch.
+- **No categories** (PR-12), **no viewer** (PR-13), **no upload** (PR-14).
+- **No bucket, no `storage.objects` policies, no path-constructing function.** Deferred to PR-14 for
+  the same reason: they have no caller until upload exists.
+- The document form files a title only — no subject picker, no visibility toggle. Both columns work
+  and are tested; neither has a control yet.
+
+## Next
+
+**PR-12 Categories.** `docs/16` §4: decide a column with a check constraint versus a table — a fixed
+list of six argues for the column.
+
+Still open from `docs/17` §13, unchanged: export placement, the shared-vs-per-domain file table
+question (**Phase 4 must settle it before `memory_files` exists**), and the Phase 9 / Phase 11
+encryption contradiction.
+
+**The landing page is now two PRs stale** (it says 18 merged; 21 after this). `CLAUDE.md` schedules
+that for the end of a phase, so it is correct to leave — but it is the first thing to fix when
+Phase 3 closes.

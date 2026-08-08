@@ -94,6 +94,24 @@ export function canChangeRoles(role: FamilyRole | null): boolean {
   return canManageFamily(role);
 }
 
+/**
+ * Mirrors the SQL `can_read_records` / `can_write_records` — Guest is excluded
+ * from both, which is the whole of their definition (matrix §4.5).
+ *
+ * These decide what the UI *offers*, never what it is *allowed*. The policies
+ * decide that, and they are what the RLS suite tests. Keeping the two in step
+ * is a courtesy to the user — showing a Guest a form that will be refused is
+ * worse than not showing it — but a screen that forgot to call these would
+ * still be safe.
+ */
+export function canReadRecords(role: FamilyRole | null): boolean {
+  return role === 'owner' || role === 'admin' || role === 'member';
+}
+
+export function canWriteRecords(role: FamilyRole | null): boolean {
+  return role === 'owner' || role === 'admin' || role === 'member';
+}
+
 export interface SetRoleInput {
   familyId: string;
   userId: string;
