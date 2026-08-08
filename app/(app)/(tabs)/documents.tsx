@@ -1,7 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { Button } from '../../../src/components/Button';
 import { EmptyState } from '../../../src/components/EmptyState';
@@ -13,14 +21,20 @@ import { getSupabase } from '../../../src/lib/supabase';
 import { TAB_DOMAINS } from '../../../src/navigation/domains';
 import { useFamily } from '../../../src/providers/FamilyProvider';
 import {
+  CATEGORY_HINTS,
+  CATEGORY_LABELS,
+  DOCUMENT_CATEGORIES,
+  countByCategory,
   createDocument,
   createSupabaseDocumentGateway,
   deleteDocument,
   describeDocumentSubject,
+  filterByCategory,
   listDocuments,
   partitionDocuments,
   setDocumentArchived,
   MAX_DOCUMENT_TITLE_LENGTH,
+  type DocumentCategory,
   type FamilyDocument,
 } from '../../../src/services/document';
 import { createSupabaseMemberGateway, listMembers, type Member } from '../../../src/services/member';
@@ -72,6 +86,8 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  // null is "All". A filter is a view of the list, never a second query.
+  const [filter, setFilter] = useState<DocumentCategory | null>(null);
 
   const load = useCallback(async () => {
     const client = getSupabase();
@@ -104,7 +120,10 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
   );
 
   const peopleById = new Map(people.map((person) => [person.id, person.displayName]));
-  const { active, archived } = partitionDocuments(documents);
+  const { active, archived } = partitionDocuments(filterByCategory(documents, filter));
+  // Counted over everything, not over the filtered view — a chip has to show
+  // what it *would* reveal, which is the opposite of what is on screen now.
+  const counts = countByCategory(documents);
 
   if (loading) {
     return (
@@ -125,12 +144,24 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
         </View>
       ) : null}
 
+      {documents.length > 0 ? (
+        <CategoryFilter selected={filter} counts={counts} onSelect={setFilter} />
+      ) : null}
+
       {!error && active.length === 0 ? (
-        <EmptyState
-          icon={domain.icon}
-          title="Nothing filed yet"
-          body="Passports, policies, deeds, certificates and warranties — filed by what they mean rather than where they happened to be saved."
-        />
+        filter ? (
+          // Different from an empty library, and it must not borrow that copy:
+          // the family does own documents, just none on this shelf.
+          <Text style={styles.emptyShelf}>
+            Nothing filed under {CATEGORY_LABELS[filter]} yet.
+          </Text>
+        ) : (
+          <EmptyState
+            icon={domain.icon}
+            title="Nothing filed yet"
+            body="Passports, policies, deeds, certificates and warranties — filed by what they mean rather than where they happened to be saved."
+          />
+        )
       ) : null}
 
       {active.map((document) => (
@@ -173,6 +204,69 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
         </>
       ) : null}
     </Screen>
+  );
+}
+
+/**
+ * The shelf selector, and the only navigation this screen has.
+ *
+ * A chip is shown for every category the family actually uses, plus All. Empty
+ * shelves are hidden rather than shown greyed out: six chips over two documents
+ * makes a library look emptier than it is, and a chip that reveals nothing is
+ * an invitation to a dead end. They reappear the moment something is filed
+ * there, which is also how a family learns the vocabulary exists.
+ */
+function CategoryFilter({
+  selected,
+  counts,
+  onSelect,
+}: {
+  selected: DocumentCategory | null;
+  counts: Record<DocumentCategory, number>;
+  onSelect: (category: DocumentCategory | null) => void;
+}) {
+  const used = DOCUMENT_CATEGORIES.filter((category) => counts[category] > 0);
+  if (used.length === 0) return null;
+
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.filterRow}
+    >
+      <Chip label="All" active={selected === null} onPress={() => onSelect(null)} />
+      {used.map((category) => (
+        <Chip
+          key={category}
+          label={`${CATEGORY_LABELS[category]} ${counts[category]}`}
+          active={selected === category}
+          // Tapping the active chip clears it. Without this the only way back
+          // to All is to find a chip at the far left of a scrolled row.
+          onPress={() => onSelect(selected === category ? null : category)}
+        />
+      ))}
+    </ScrollView>
+  );
+}
+
+function Chip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.chip, active ? styles.chipActive : null]}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+    >
+      <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -242,7 +336,8 @@ function DocumentCard({
           until PR-14, and even then this line should not become "1 file, 2.4MB".
         */}
         <Text style={styles.cardMeta}>
-          {describeDocumentSubject(document, peopleById)} · {formatRelativeTime(document.createdAt)}
+          {CATEGORY_LABELS[document.category]} · {describeDocumentSubject(document, peopleById)} ·{' '}
+          {formatRelativeTime(document.createdAt)}
         </Text>
 
         <View style={styles.badges}>
@@ -289,22 +384,30 @@ function DocumentCard({
  */
 function FileDocument({ familyId, onFiled }: { familyId: string; onFiled: () => Promise<void> }) {
   const [title, setTitle] = useState('');
+  const [category, setCategory] = useState<DocumentCategory | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleFile() {
+    if (!category) {
+      setError('Choose where this belongs.');
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
       const result = await createDocument(createSupabaseDocumentGateway(getSupabase()), {
         familyId,
         title,
+        category,
       });
       if (!result.ok) {
         setError(result.message);
         return;
       }
       setTitle('');
+      setCategory(null);
       await onFiled();
     } finally {
       setBusy(false);
@@ -321,6 +424,29 @@ function FileDocument({ familyId, onFiled }: { familyId: string; onFiled: () => 
         maxLength={MAX_DOCUMENT_TITLE_LENGTH}
         editable={!busy}
       />
+
+      {/*
+        All six are always offered here, unlike the filter row above. Filtering
+        is about what exists; filing is about what could. Hiding an unused shelf
+        at this point would make the first document of a kind impossible to file.
+      */}
+      <View style={styles.picker}>
+        {DOCUMENT_CATEGORIES.map((option) => (
+          <Chip
+            key={option}
+            label={CATEGORY_LABELS[option]}
+            active={category === option}
+            onPress={() => setCategory(category === option ? null : option)}
+          />
+        ))}
+      </View>
+
+      {/*
+        The hint is the reason the six read as obvious rather than as a quiz.
+        Shown only once a shelf is picked, so the form stays quiet until then.
+      */}
+      {category ? <Text style={styles.hint}>{CATEGORY_HINTS[category]}</Text> : null}
+
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Button label="File it" onPress={handleFile} busy={busy} disabled={busy} />
     </View>
@@ -330,6 +456,48 @@ function FileDocument({ familyId, onFiled }: { familyId: string; onFiled: () => 
 const styles = StyleSheet.create({
   form: {
     marginBottom: theme.spacing.lg,
+  },
+  picker: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  hint: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.caption,
+    marginBottom: theme.spacing.sm,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
+  },
+  chip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  chipActive: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.primary,
+  },
+  chipText: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.caption,
+  },
+  chipTextActive: {
+    color: theme.colors.primary,
+    fontWeight: '600',
+  },
+  emptyShelf: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.caption,
+    textAlign: 'center',
+    paddingVertical: theme.spacing.lg,
   },
   error: {
     color: theme.colors.error,
