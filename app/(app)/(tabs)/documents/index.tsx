@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,15 +10,16 @@ import {
   View,
 } from 'react-native';
 
-import { Button } from '../../../src/components/Button';
-import { EmptyState } from '../../../src/components/EmptyState';
-import { LockedNotice } from '../../../src/components/LockedNotice';
-import { Screen } from '../../../src/components/Screen';
-import { TextField } from '../../../src/components/TextField';
-import { formatRelativeTime } from '../../../src/lib/relativeTime';
-import { getSupabase } from '../../../src/lib/supabase';
-import { TAB_DOMAINS } from '../../../src/navigation/domains';
-import { useFamily } from '../../../src/providers/FamilyProvider';
+import { Button } from '../../../../src/components/Button';
+import { EmptyState } from '../../../../src/components/EmptyState';
+import { LockedNotice } from '../../../../src/components/LockedNotice';
+import { Screen } from '../../../../src/components/Screen';
+import { TextField } from '../../../../src/components/TextField';
+import { formatRelativeTime } from '../../../../src/lib/relativeTime';
+import { getSupabase } from '../../../../src/lib/supabase';
+import { TAB_DOMAINS } from '../../../../src/navigation/domains';
+import { useAuth } from '../../../../src/providers/AuthProvider';
+import { useFamily } from '../../../../src/providers/FamilyProvider';
 import {
   CATEGORY_HINTS,
   CATEGORY_LABELS,
@@ -27,19 +27,18 @@ import {
   countByCategory,
   createDocument,
   createSupabaseDocumentGateway,
-  deleteDocument,
+  describeDocumentAuthor,
   describeDocumentSubject,
   filterByCategory,
   listDocuments,
   partitionDocuments,
-  setDocumentArchived,
   MAX_DOCUMENT_TITLE_LENGTH,
   type DocumentCategory,
   type FamilyDocument,
-} from '../../../src/services/document';
-import { createSupabaseMemberGateway, listMembers, type Member } from '../../../src/services/member';
-import { canReadRecords, canWriteRecords } from '../../../src/services/role';
-import { theme } from '../../../src/theme';
+} from '../../../../src/services/document';
+import { createSupabaseMemberGateway, listMembers, type Member } from '../../../../src/services/member';
+import { canReadRecords, canWriteRecords } from '../../../../src/services/role';
+import { theme } from '../../../../src/theme';
 
 const domain = TAB_DOMAINS.find((entry) => entry.id === 'documents')!;
 
@@ -81,6 +80,8 @@ export default function DocumentsScreen() {
 }
 
 function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boolean }) {
+  const { session } = useAuth();
+  const viewerUserId = session?.user.id ?? null;
   const [documents, setDocuments] = useState<FamilyDocument[]>([]);
   const [people, setPeople] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,7 +170,8 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
           key={document.id}
           document={document}
           peopleById={peopleById}
-          onArchive={canFile ? () => void archiveThen(document, true, load) : undefined}
+          people={people}
+          viewerUserId={viewerUserId}
         />
       ))}
 
@@ -193,12 +195,12 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
           {showArchived
             ? archived.map((document) => (
                 <DocumentCard
-                  key={document.id}
-                  document={document}
-                  peopleById={peopleById}
-                  onRestore={canFile ? () => void archiveThen(document, false, load) : undefined}
-                  onDelete={canFile ? () => confirmDelete(document, load) : undefined}
-                />
+          key={document.id}
+          document={document}
+          peopleById={peopleById}
+          people={people}
+          viewerUserId={viewerUserId}
+        />
               ))
             : null}
         </>
@@ -270,63 +272,33 @@ function Chip({
   );
 }
 
-async function archiveThen(
-  document: FamilyDocument,
-  archived: boolean,
-  reload: () => Promise<void>,
-): Promise<void> {
-  await setDocumentArchived(
-    createSupabaseDocumentGateway(getSupabase()),
-    document.id,
-    archived,
-  );
-  await reload();
-}
-
 /**
- * Delete is offered on archived documents only, and behind a confirmation.
+ * A card is now a link, and carries no controls of its own.
  *
- * Two steps rather than one because this is a hard delete — `deleted_at`
- * exists on the row but nothing sets it, since soft delete without a restore
- * screen would be a column nobody can reach. Archiving first means the
- * destructive action is never one mis-tap away from a document in daily use,
- * and the copy says "cannot be undone" because it cannot.
+ * Archive, restore and delete moved to the detail screen. Piling icons onto a
+ * list row is what makes an app feel like a file manager, which `docs/10` §2
+ * names as the thing this product must not feel like — and NFR-014's "minimal
+ * navigation" is about the actions a family reaches for often, which is finding
+ * a document rather than archiving one.
  */
-function confirmDelete(document: FamilyDocument, reload: () => Promise<void>): void {
-  Alert.alert(
-    `Delete ${document.title}?`,
-    'This cannot be undone.',
-    [
-      { text: 'Keep it', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            await deleteDocument(createSupabaseDocumentGateway(getSupabase()), document.id);
-            await reload();
-          })();
-        },
-      },
-    ],
-  );
-}
-
 function DocumentCard({
   document,
   peopleById,
-  onArchive,
-  onRestore,
-  onDelete,
+  people,
+  viewerUserId,
 }: {
   document: FamilyDocument;
   peopleById: Map<string, string>;
-  onArchive?: () => void;
-  onRestore?: () => void;
-  onDelete?: () => void;
+  people: Member[];
+  viewerUserId: string | null;
 }) {
   return (
-    <View style={[styles.card, document.archivedAt ? styles.cardArchived : null]}>
+    <Pressable
+      onPress={() => router.push(`/(app)/(tabs)/documents/${document.id}`)}
+      style={[styles.card, document.archivedAt ? styles.cardArchived : null]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${document.title}`}
+    >
       <View style={styles.cardBody}>
         <Text style={styles.cardTitle}>{document.title}</Text>
 
@@ -336,17 +308,21 @@ function DocumentCard({
           until PR-14, and even then this line should not become "1 file, 2.4MB".
         */}
         <Text style={styles.cardMeta}>
-          {CATEGORY_LABELS[document.category]} · {describeDocumentSubject(document, peopleById)} ·{' '}
+          {CATEGORY_LABELS[document.category]} · {describeDocumentSubject(document, peopleById)}
+        </Text>
+
+        {/*
+          Filed-by reads "You" for every document until PR-15 ships sharing, and
+          is built now so the card does not change shape once it stops doing so.
+          The "Private" badge that used to sit here is gone: every document is
+          private, and a badge that is always on says nothing.
+        */}
+        <Text style={styles.cardMeta}>
+          Filed by {describeDocumentAuthor(document, people, viewerUserId)} ·{' '}
           {formatRelativeTime(document.createdAt)}
         </Text>
 
         <View style={styles.badges}>
-          {document.visibility === 'private' ? (
-            <View style={styles.badge}>
-              <Ionicons name="eye-off-outline" size={12} color={theme.colors.textMuted} />
-              <Text style={styles.badgeText}>Private</Text>
-            </View>
-          ) : null}
           {document.aiProcessing === 'allowed' ? (
             <View style={styles.badge}>
               <Ionicons name="sparkles-outline" size={12} color={theme.colors.textMuted} />
@@ -356,22 +332,8 @@ function DocumentCard({
         </View>
       </View>
 
-      {onArchive ? (
-        <Pressable onPress={onArchive} accessibilityRole="button" accessibilityLabel="Archive">
-          <Ionicons name="archive-outline" size={20} color={theme.colors.textMuted} />
-        </Pressable>
-      ) : null}
-      {onRestore ? (
-        <Pressable onPress={onRestore} accessibilityRole="button" accessibilityLabel="Restore">
-          <Ionicons name="arrow-undo-outline" size={20} color={theme.colors.textMuted} />
-        </Pressable>
-      ) : null}
-      {onDelete ? (
-        <Pressable onPress={onDelete} accessibilityRole="button" accessibilityLabel="Delete">
-          <Ionicons name="trash-outline" size={20} color={theme.colors.error} />
-        </Pressable>
-      ) : null}
-    </View>
+      <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+    </Pressable>
   );
 }
 

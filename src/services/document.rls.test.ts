@@ -16,14 +16,16 @@
  * `can_see_record` delegates 'family' to `can_read_records`, which excludes
  * Guest. Matrix §4.5 is enforced by an expression that names no role.
  *
- * **No role reads a private record** — not even the Owner (matrix §8.4). This
- * is the first table where that can be shown with real rows rather than
- * asserted about a function, and it is the decision most likely to be
- * "corrected" later by someone who thinks an Owner should see everything.
+ * **A document belongs to whoever filed it, and to nobody else** — not the
+ * family Owner, not the person it is about. That is stronger than matrix §8.4's
+ * "no role reads a private record", because after 20260810090000 every document
+ * is private and the subject no longer grants anything either.
  *
- * **document_members grants nothing.** Linking yourself to a document must not
- * make it visible. If it did, any member could read any private document by
- * inserting one row, and no interface would be needed to do it.
+ * **The regression this suite exists to prevent.** Until 20260810090000, naming
+ * somebody in the subject field gave them read *and write* access: they could
+ * rename a document they had not filed, and set its visibility back to 'family',
+ * publishing somebody's private document to the household. Several tests below
+ * are the exact inverse of tests that passed the day before.
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -129,8 +131,9 @@ describeRls('documents', () => {
       .insert({
         family_id: familyId,
         created_by: authorId,
-        visibility: 'family',
         category: 'identity',
+        // No `visibility` — the column defaults to 'private', and a helper that
+        // set it would hide exactly the regression these tests exist to catch.
         ...fields,
       })
       .select(COLUMNS)
@@ -227,12 +230,13 @@ describeRls('documents', () => {
   });
 
   describe('who may read', () => {
-    it('shows a member the family documents', async () => {
+    it('shows a member their own documents and no one else\'s', async () => {
       await inviteAndJoin(member, 'member');
       await file(owner, ownerId, { title: 'Property Deed' });
+      await file(member, memberId, { title: 'My Aadhaar' });
 
-      const rows = await read(member);
-      expect(rows.map((row) => row.title)).toEqual(['Property Deed']);
+      expect((await read(member)).map((row) => row.title)).toEqual(['My Aadhaar']);
+      expect((await read(owner)).map((row) => row.title)).toEqual(['Property Deed']);
     });
 
     it('shows a guest nothing, without any policy naming a role', async () => {
@@ -278,72 +282,64 @@ describeRls('documents', () => {
     });
   });
 
-  describe('private documents', () => {
-    it('hides a member’s private document from the owner', async () => {
-      // Matrix §8.4, and the decision most likely to be "fixed" by somebody who
-      // assumes an Owner outranks privacy. The failure mode this project chose
-      // is data being unreachable, never data leaking.
+  describe('a document belongs to its author', () => {
+    it('shows the author their own document', async () => {
       await inviteAndJoin(member, 'member');
-      await file(member, memberId, { title: 'Therapy notes', visibility: 'private' });
+      const doc = await file(member, memberId, { title: 'Therapy notes' });
+
+      expect((await read(member)).map((row) => row.id)).toEqual([doc.id]);
+    });
+
+    it('hides it from the family owner', async () => {
+      await inviteAndJoin(member, 'member');
+      await file(member, memberId, { title: 'Therapy notes' });
 
       expect(await read(owner)).toEqual([]);
     });
 
-    it('shows the author their own private document', async () => {
+    it('hides the owner\'s documents from a member', async () => {
+      // The half that used to work the other way round: 'family' was the
+      // default, so everything an owner filed was readable by every member.
       await inviteAndJoin(member, 'member');
-      await file(member, memberId, { title: 'Therapy notes', visibility: 'private' });
+      await file(owner, ownerId, { title: 'Property Deed' });
 
-      const rows = await read(member);
-      expect(rows.map((row) => row.title)).toEqual(['Therapy notes']);
+      expect(await read(member)).toEqual([]);
     });
 
-    it('shows the subject a private document filed about them by someone else', async () => {
-      // The other half of can_see_record's private branch: a document *about*
-      // you is yours to read even when you did not file it.
+    it('defaults to private without the client asking for it', async () => {
+      const { data, error } = await owner
+        .from('documents')
+        .insert({ family_id: familyId, title: 'Passport', category: 'identity', created_by: ownerId })
+        .select(COLUMNS)
+        .single();
+
+      expect(error).toBeNull();
+      expect((data as DocumentRow).visibility).toBe('private');
+    });
+
+    it('does not grant access to the person it is about', async () => {
+      // **The regression test for the reported bug.** This asserted the exact
+      // opposite one day earlier: naming a subject used to hand them the row.
       await inviteAndJoin(member, 'member');
       const memberPerson = await personFor(memberId);
 
-      await file(owner, ownerId, {
-        title: 'Medical report',
-        visibility: 'private',
-        member_id: memberPerson,
-      });
+      await file(owner, ownerId, { title: 'Medical report', member_id: memberPerson });
 
-      const rows = await read(member);
-      expect(rows.map((row) => row.title)).toEqual(['Medical report']);
+      expect(await read(member)).toEqual([]);
     });
 
-    it('stops the owner deleting a private document they cannot read', async () => {
-      // The DELETE policy gates on `can_see_record` *before* considering the
-      // role, so managerial delete does not reach a record privacy already
-      // hid. An owner-only delete would have been defensible — deleting is not
-      // reading — but this is the stricter reading and it costs nothing: the
-      // owner still holds the real escape hatch, which is deleting the family
-      // and cascading everything, and that is auditable in a way a silent
-      // single-row delete is not.
+    it('separates the two reasons a row might be readable', async () => {
+      // A 'family' row is readable by a member because of their *role*, never
+      // because they are its subject. Flipping the same row to private proves
+      // which of the two was doing the work.
       await inviteAndJoin(member, 'member');
-      const doc = await file(member, memberId, {
-        title: 'Therapy notes',
-        visibility: 'private',
-      });
+      const memberPerson = await personFor(memberId);
+      const doc = await file(owner, ownerId, { title: 'Legacy row', member_id: memberPerson });
 
-      // Matches no visible row, so it reports success having done nothing.
-      await owner.from('documents').delete().eq('id', doc.id);
+      await owner.from('documents').update({ visibility: 'family' }).eq('id', doc.id);
+      expect((await read(member)).map((row) => row.id)).toContain(doc.id);
 
-      // The author is the only one who can confirm either way.
-      const rows = await read(member);
-      expect(rows.map((row) => row.id)).toContain(doc.id);
-    });
-
-    it('lets the author delete their own private document', async () => {
-      await inviteAndJoin(member, 'member');
-      const doc = await file(member, memberId, {
-        title: 'Therapy notes',
-        visibility: 'private',
-      });
-
-      await member.from('documents').delete().eq('id', doc.id);
-
+      await owner.from('documents').update({ visibility: 'private' }).eq('id', doc.id);
       expect(await read(member)).toEqual([]);
     });
   });
@@ -463,9 +459,9 @@ describeRls('documents', () => {
       }
     });
 
-    it('lets a member re-file a document onto another shelf', async () => {
+    it('lets an author re-file their own document onto another shelf', async () => {
       await inviteAndJoin(member, 'member');
-      const doc = await file(owner, ownerId, { title: 'Insurance', category: 'finance' });
+      const doc = await file(member, memberId, { title: 'Insurance', category: 'finance' });
 
       const { error } = await member
         .from('documents')
@@ -473,8 +469,16 @@ describeRls('documents', () => {
         .eq('id', doc.id);
 
       expect(error).toBeNull();
-      const rows = await read(owner);
-      expect(rows.find((row) => row.id === doc.id)?.category).toBe('medical');
+      expect((await read(member)).find((row) => row.id === doc.id)?.category).toBe('medical');
+    });
+
+    it('stops a member re-filing somebody else\'s document', async () => {
+      await inviteAndJoin(member, 'member');
+      const doc = await file(owner, ownerId, { title: 'Insurance', category: 'finance' });
+
+      await member.from('documents').update({ category: 'medical' }).eq('id', doc.id);
+
+      expect((await read(owner)).find((row) => row.id === doc.id)?.category).toBe('finance');
     });
 
     it('stops a guest re-filing anything', async () => {
@@ -486,6 +490,132 @@ describeRls('documents', () => {
 
       const rows = await read(owner);
       expect(rows.find((row) => row.id === doc.id)?.category).toBe('finance');
+    });
+  });
+
+  describe('only the author may write', () => {
+    it('lets the author rename their own document', async () => {
+      await inviteAndJoin(member, 'member');
+      const doc = await file(member, memberId, { title: 'Untitled' });
+
+      const { error } = await member
+        .from('documents')
+        .update({ title: 'Property Deed' })
+        .eq('id', doc.id);
+
+      expect(error).toBeNull();
+      expect((await read(member)).find((row) => row.id === doc.id)?.title).toBe('Property Deed');
+    });
+
+    it('refuses a rename to an empty title', async () => {
+      const doc = await file(owner, ownerId, { title: 'Deed' });
+
+      const { error } = await owner.from('documents').update({ title: '   ' }).eq('id', doc.id);
+
+      expect(error).not.toBeNull();
+    });
+
+    it('stops the owner renaming a member\'s document', async () => {
+      // Matches no visible row, so it reports success having changed nothing —
+      // which is why the assertion comes from the author's session.
+      await inviteAndJoin(member, 'member');
+      const doc = await file(member, memberId, { title: 'Therapy notes' });
+
+      await owner.from('documents').update({ title: 'Renamed by owner' }).eq('id', doc.id);
+
+      expect((await read(member)).find((row) => row.id === doc.id)?.title).toBe('Therapy notes');
+    });
+
+    it('stops the subject editing a document filed about them', async () => {
+      // The reported bug, from the writing side. Naming somebody used to give
+      // them the row *and* the right to change every field on it.
+      await inviteAndJoin(member, 'member');
+      const memberPerson = await personFor(memberId);
+      const doc = await file(owner, ownerId, { title: 'Medical report', member_id: memberPerson });
+
+      await member.from('documents').update({ title: 'Taken over' }).eq('id', doc.id);
+
+      expect((await read(owner)).find((row) => row.id === doc.id)?.title).toBe('Medical report');
+    });
+
+    it('stops the subject publishing a private document to the family', async () => {
+      // The sharpest form of the hole: the subject could set visibility back to
+      // 'family' and expose the author's document to the whole household.
+      await inviteAndJoin(member, 'member');
+      const memberPerson = await personFor(memberId);
+      const doc = await file(owner, ownerId, { title: 'Will', member_id: memberPerson });
+
+      await member.from('documents').update({ visibility: 'family' }).eq('id', doc.id);
+
+      expect((await read(owner)).find((row) => row.id === doc.id)?.visibility).toBe('private');
+    });
+
+    it('stops the owner deleting a member\'s document', async () => {
+      await inviteAndJoin(member, 'member');
+      const doc = await file(member, memberId, { title: 'Therapy notes' });
+
+      await owner.from('documents').delete().eq('id', doc.id);
+
+      expect((await read(member)).map((row) => row.id)).toContain(doc.id);
+    });
+
+    it('lets the author delete their own document', async () => {
+      await inviteAndJoin(member, 'member');
+      const doc = await file(member, memberId, { title: 'Therapy notes' });
+
+      await member.from('documents').delete().eq('id', doc.id);
+
+      expect(await read(member)).toEqual([]);
+    });
+
+    it('refuses to let authorship be rewritten', async () => {
+      const doc = await file(owner, ownerId, { title: 'Deed' });
+
+      const { error } = await owner
+        .from('documents')
+        .update({ created_by: memberId })
+        .eq('id', doc.id);
+
+      // pin_created_by. Ownership transfer is parked, and until it is designed
+      // the column is the one thing on this row nobody can move.
+      expect(error).not.toBeNull();
+    });
+
+    it('records AI consent being granted and withdrawn', async () => {
+      const doc = await file(owner, ownerId, { title: 'Passport' });
+      expect(doc.ai_processing).toBe('denied');
+
+      await owner.from('documents').update({ ai_processing: 'allowed' }).eq('id', doc.id);
+      expect((await read(owner)).find((row) => row.id === doc.id)?.ai_processing).toBe('allowed');
+    });
+
+    it('lets the author read one document directly by id', async () => {
+      const doc = await file(owner, ownerId, { title: 'Deed' });
+
+      const { data, error } = await owner
+        .from('documents')
+        .select(COLUMNS)
+        .eq('id', doc.id)
+        .maybeSingle();
+
+      expect(error).toBeNull();
+      expect((data as DocumentRow | null)?.title).toBe('Deed');
+    });
+
+    it('returns nothing when somebody else knows a document id', async () => {
+      // Null, not an error — which is why getDocument reports a hidden row with
+      // its own message rather than as a failure.
+      await inviteAndJoin(member, 'member');
+      const doc = await file(owner, ownerId, { title: 'Deed' });
+
+      const { data, error } = await member
+        .from('documents')
+        .select(COLUMNS)
+        .eq('id', doc.id)
+        .maybeSingle();
+
+      expect(error).toBeNull();
+      expect(data).toBeNull();
     });
   });
 
