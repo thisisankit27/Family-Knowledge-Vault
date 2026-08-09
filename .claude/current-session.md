@@ -1587,3 +1587,77 @@ encryption contradiction.
 **The landing page is now two PRs stale** (it says 18 merged; 21 after this). `CLAUDE.md` schedules
 that for the end of a phase, so it is correct to leave — but it is the first thing to fix when
 Phase 3 closes.
+
+---
+---
+
+# PR-12 + PR-13 — Categories, the detail screen, and a privilege escalation (2026-08-09)
+
+**382 CI tests, 191 RLS tests, thirteen migrations.** PR-12 merged as #22. PR-13 is this branch.
+
+## PR-12 — categories
+
+Six shelves as a **check-constrained column, not a table**, and the deciding argument was already in
+the repo: `docs/08` §16 defines a Tagging Model as the free-form user-chosen axis, so category could
+be the fixed one. A table would have needed six seed rows per family — the PR-7 backfill shape — and
+would have built the tag system twice.
+
+**Mandatory, not nullable.** An uncategorised bucket is the junk drawer the product exists to
+replace. That required deleting existing rows, which was safe exactly once and the migration records
+why rather than leaving a reader to wonder.
+
+**"Archived" is not the seventh value** even though IA §4 lists it beside the six. It is a timestamp,
+and a document can be Medical *and* archived.
+
+## PR-13 — sequenced backwards, then reshaped
+
+**"Viewer — open a document" was scheduled before "Upload", so there was nothing to open.** Caught
+before starting. FR-014's six actions split cleanly — Preview and Download need bytes, Rename, Move,
+Archive and Delete need only the record — so PR-13 opens the *record*, and Preview/Download join
+PR-14.
+
+## The hole, and what it changed
+
+Demoing the subject picker exposed a privilege escalation **in PR-11 code I wrote**. The UPDATE
+policy was `can_see_record(...) and can_write_records(...)` — **seeing implied editing**. Since
+`can_see_record` grants a private record to its author *or its subject* (§8.3), naming somebody in
+"About" handed them write access to a document they had not filed, including the ability to set
+`visibility` back to `'family'` and **publish it to the whole household**.
+
+**Found on a device, not by the 35 RLS tests** — several of which were cheerfully asserting the
+buggy behaviour was correct. That is the part worth remembering: a test suite written against a
+wrong model defends the wrong model.
+
+Migration `20260810090000` corrects the model rather than patching the policy:
+
+| | |
+|---|---|
+| Read / write / delete | **The author. Nobody else** — not the family Owner, not the subject |
+| `member_id` | A **pure label**, "Belongs to". No permission effect at all |
+| `visibility` | Defaults `private`; **no UI can set `family`** |
+| `created_by` | Immutable, and already was — `pin_created_by` since PR-11 |
+| Sharing | **PR-15**, which is un-vacated and now has a real job |
+
+**The mechanism is one argument, not a rewrite:** every documents policy passes **`null`** where the
+resolver expects a subject, so §8.3's subject branch cannot match. `can_see_record` itself is
+untouched, and Phase 4–6 tables still get the subject branch if they want it.
+
+## The lesson, generalised
+
+*"Who is this record about"* and *"who may read this record"* are different questions. **A column
+answering both is a privilege escalation waiting to be noticed.** Phases 4, 5 and 6 all reuse this
+table's shape, so this is the third time a Phase-3 shortcut would have been taken three times.
+
+## Deliberate gaps
+
+- `setDocumentVisibility` was **deleted**, not left unreachable — PR-15 re-adds it with a design.
+- Cards show "Filed by You" for everything until sharing exists. Built now so the card does not
+  change shape later.
+- The filing form still has no "Belongs to" picker; a document starts unassigned.
+- `documents.deleted_at` still unset by anything; delete is hard, archived-only, confirmed.
+- `document_files` still has no INSERT policy — PR-14.
+
+## Next
+
+**PR-14 Upload.** Bucket, `storage.objects` policies, the path-constructing function, picker,
+progress (NFR-007), storage RLS tests. Likely needs splitting — it is the heaviest PR of the phase.
