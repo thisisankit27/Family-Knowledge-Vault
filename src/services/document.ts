@@ -9,6 +9,10 @@
  * written here would be a second permission model that the RLS suite does not
  * test, and the first place the two disagreed would be a leak.
  *
+ * The model those policies enforce, as of 20260810090000: **a document belongs
+ * to whoever filed it, and to nobody else.** Not the family Owner, not the
+ * person it is about. Sharing arrives in PR-15.
+ *
  * What it does own is the vocabulary the UI speaks: a document has a *title*
  * and a *subject*, never a filename and a folder. `docs/10-ui-ux-design.md` §13
  * — "context is more valuable than filenames" — is a product constraint, and
@@ -32,7 +36,13 @@ export const MAX_DOCUMENT_TITLE_LENGTH = 120;
 export const AI_PROCESSING_MODES = ['allowed', 'denied'] as const;
 export type AiProcessing = (typeof AI_PROCESSING_MODES)[number];
 
-/** Mirrors `documents.visibility`. */
+/**
+ * Mirrors `documents.visibility`.
+ *
+ * **Nothing sets this today.** Every document is `private` by default and only
+ * its author can read it; the second value survives so PR-15 has somewhere to
+ * put sharing rather than needing a constraint change on top of a design.
+ */
 export const DOCUMENT_VISIBILITIES = ['family', 'private'] as const;
 export type DocumentVisibility = (typeof DOCUMENT_VISIBILITIES)[number];
 
@@ -111,18 +121,27 @@ export interface CreateDocumentInput {
   title: string;
   /** Required. The column is `not null`; there is no "uncategorised" shelf. */
   category: DocumentCategory;
-  /** The person it is about. Null means it belongs to the household. */
+  /** Whose document it is. A label only — see `setDocumentMember`. */
   memberId?: string | null;
-  visibility?: DocumentVisibility;
   aiProcessing?: AiProcessing;
 }
 
 export interface DocumentGateway {
   listDocuments(familyId: string): Promise<GatewayResult<FamilyDocument[]>>;
   createDocument(input: CreateDocumentInput): Promise<GatewayResult<FamilyDocument>>;
+  getDocument(documentId: string): Promise<GatewayResult<FamilyDocument>>;
   setCategory(
     documentId: string,
     category: DocumentCategory,
+  ): Promise<{ error: { message: string } | null }>;
+  setTitle(documentId: string, title: string): Promise<{ error: { message: string } | null }>;
+  setMember(
+    documentId: string,
+    memberId: string | null,
+  ): Promise<{ error: { message: string } | null }>;
+  setAiProcessing(
+    documentId: string,
+    aiProcessing: AiProcessing,
   ): Promise<{ error: { message: string } | null }>;
   archiveDocument(documentId: string, archived: boolean): Promise<{ error: { message: string } | null }>;
   deleteDocument(documentId: string): Promise<{ error: { message: string } | null }>;
@@ -265,6 +284,95 @@ export async function deleteDocument(
 }
 
 /**
+ * One document, or a clear reason why not.
+ *
+ * `null` data with no error is the interesting case: the row exists, and
+ * `can_see_record` declined to return it. That is not an error condition — it
+ * is what privacy looks like from outside — so it gets its own message rather
+ * than being reported as a failure.
+ */
+export async function getDocument(
+  gateway: DocumentGateway,
+  documentId: string,
+): Promise<DocumentOutcome> {
+  const { data, error } = await gateway.getDocument(documentId);
+  if (error) return { ok: false, message: describeDocumentError(error.message) };
+  if (!data) return { ok: false, message: 'That document is no longer available.' };
+  return { ok: true, document: data };
+}
+
+/**
+ * Rename a document.
+ *
+ * Validated with the same function that guards creation, so the rule lives in
+ * one place — a title that could not be filed must not become reachable by
+ * editing one that already was.
+ */
+export async function renameDocument(
+  gateway: DocumentGateway,
+  documentId: string,
+  title: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const invalid = validateDocumentTitle(title);
+  if (invalid) return { ok: false, message: invalid.message };
+
+  const { error } = await gateway.setTitle(documentId, title.trim());
+  if (error) return { ok: false, message: describeDocumentError(error.message) };
+  return { ok: true };
+}
+
+/**
+ * Say who a document is *about* — whose passport this is.
+ *
+ * Distinct from who filed it, which is `created_by` and is not editable. With
+ * four passports in a household, "Dad's" is the fact that makes the library
+ * usable; who happened to photograph it is provenance, not identity.
+ *
+ * `null` means the household owns it — a property deed or an electricity
+ * connection belongs to no one person.
+ *
+ * **It grants nothing.** This used to be the opposite: `can_see_record` gives a
+ * private record to its author *or its subject*, so naming somebody here handed
+ * them read *and* write access to a document they had not filed — the hole
+ * 20260810090000 closed. The documents policies now pass `null` in the subject
+ * position, so this column is inert to permissions and is only a label.
+ *
+ * Keeping the two ideas apart is the whole repair. "Whose passport is this" and
+ * "who may open this" are different questions, and answering both with one
+ * column is what produced a privilege escalation nobody wrote on purpose.
+ */
+export async function setDocumentMember(
+  gateway: DocumentGateway,
+  documentId: string,
+  memberId: string | null,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { error } = await gateway.setMember(documentId, memberId);
+  if (error) return { ok: false, message: describeDocumentError(error.message) };
+  return { ok: true };
+}
+
+/**
+ * Change whether AI may read this document.
+ *
+ * A consent flag, and the UI must not overstate it: this is a promise kept by
+ * code, not a guarantee the server cannot read the bytes. The encryption tier
+ * that *would* be such a guarantee is Phase 11's, and is a different control.
+ */
+export async function setDocumentAiProcessing(
+  gateway: DocumentGateway,
+  documentId: string,
+  aiProcessing: AiProcessing,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!AI_PROCESSING_MODES.includes(aiProcessing)) {
+    return { ok: false, message: 'That privacy setting is not recognised.' };
+  }
+
+  const { error } = await gateway.setAiProcessing(documentId, aiProcessing);
+  if (error) return { ok: false, message: describeDocumentError(error.message) };
+  return { ok: true };
+}
+
+/**
  * Re-file a document onto a different shelf.
  *
  * Separate from archiving for the same reason archive is separate from delete:
@@ -354,6 +462,26 @@ export function describeDocumentSubject(
   return peopleById.get(document.memberId) ?? 'Someone in this family';
 }
 
+/**
+ * Who filed this document, from the reader's point of view.
+ *
+ * "You" when it is you, the same courtesy the activity feed already extends.
+ * Degrades to "Someone" rather than an id: the account may simply have been
+ * deleted, and the document is still theirs to have filed. Dropping the line
+ * would be worse than softening the name.
+ */
+export function describeDocumentAuthor(
+  document: FamilyDocument,
+  people: { userId: string | null; displayName: string }[],
+  viewerUserId: string | null,
+): string {
+  if (!document.createdBy) return 'Someone';
+  if (document.createdBy === viewerUserId) return 'You';
+
+  const person = people.find((candidate) => candidate.userId === document.createdBy);
+  return person?.displayName ?? 'Someone';
+}
+
 interface DocumentRow {
   id: string;
   title: string;
@@ -402,7 +530,7 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
       return { data: data ? data.map(toDocument) : null, error };
     },
 
-    async createDocument({ familyId, title, category, memberId, visibility, aiProcessing }) {
+    async createDocument({ familyId, title, category, memberId, aiProcessing }) {
       // `created_by` is sent explicitly because the INSERT policy requires it
       // to equal auth.uid() — the database will not infer it, and a default
       // would let a client file a document in somebody else's name.
@@ -415,7 +543,6 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
           title,
           category,
           member_id: memberId ?? null,
-          visibility: visibility ?? 'family',
           ai_processing: aiProcessing ?? 'denied',
           created_by: session.user?.id ?? null,
         })
@@ -423,6 +550,46 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
         .maybeSingle<DocumentRow>();
 
       return { data: data ? toDocument(data) : null, error };
+    },
+
+    async getDocument(documentId) {
+      // `maybeSingle`, not `single`: a row the policy hides is a legitimate
+      // answer, and `single` would turn it into an error the caller cannot
+      // distinguish from a real one.
+      const { data, error } = await client
+        .from('documents')
+        .select(DOCUMENT_COLUMNS)
+        .eq('id', documentId)
+        .maybeSingle<DocumentRow>();
+
+      return { data: data ? toDocument(data) : null, error };
+    },
+
+    async setTitle(documentId, title) {
+      const { error } = await client
+        .from('documents')
+        .update({ title })
+        .eq('id', documentId);
+
+      return { error };
+    },
+
+    async setMember(documentId, memberId) {
+      const { error } = await client
+        .from('documents')
+        .update({ member_id: memberId })
+        .eq('id', documentId);
+
+      return { error };
+    },
+
+    async setAiProcessing(documentId, aiProcessing) {
+      const { error } = await client
+        .from('documents')
+        .update({ ai_processing: aiProcessing })
+        .eq('id', documentId);
+
+      return { error };
     },
 
     async setCategory(documentId, category) {

@@ -162,12 +162,56 @@ across sessions.
 |---|---|---|
 | **11 Document Library** | `documents` table on the spine, list screen, service + RLS tests | The vertical slice must include *something* reaching the screen. No permission design. |
 | **12 Categories** | Identity / Medical / Finance / Property / Education / Legal, per IA §4 | Decide: a column with a check constraint, or a table. A fixed list argues for the column. |
-| **13 Viewer** | Open a document | **Budget over 2h.** See §5 on `react-native-pdf`. |
-| **14 Upload** | Expo ImagePicker / DocumentPicker → Supabase Storage | Where §3.2's decisions come due. NFR-007 requires visible progress. |
-| **15 Sharing** | **Vacated — see §6.1** | "Sharing" resolved to nothing Phase 3 should build. Slot is open. |
+| **13 Viewer** | ~~Open a document~~ → **Document detail: rename, re-file, visibility, AI consent, archive, delete.** See the amendment below. | The over-2h budget no longer applies — it existed only for `react-native-pdf`, and §5 settled on a WebView. |
+| **14 Upload** | Expo ImagePicker / DocumentPicker → Supabase Storage, **then Preview and Download** | Where §3.2's decisions come due. NFR-007 requires visible progress. Likely needs splitting. |
+| **15 Sharing** | **Un-vacated 2026-08-09 — sharing, properly.** Every document is now author-only, so this is the PR that decides how one reaches anybody else. | Restores `visibility` to the UI and either `member_id` or a `record_shares` table (matrix §10) to the resolver. Read the §8.4 amendment first. |
 
 Phase 4 (Memories) and Phase 5 (Medical) both explicitly reuse this phase's upload and CRUD
 patterns, so a shortcut taken here is taken three times.
+
+### Amendment, 2026-08-09: PR-13 and PR-14 were sequenced backwards
+
+**"Viewer — open a document" came before "Upload", so there was nothing to open.** Caught before
+PR-13 started rather than during it.
+
+The fix is not a reordering, because FR-014's six actions split cleanly along exactly this line:
+
+| Needs a file | Does not |
+|---|---|
+| Preview, Download | Rename, **Move** (re-file), Archive, Delete |
+
+So **PR-13 opens the *record*** — the detail screen those four actions belong on — and **Preview and
+Download join PR-14**, slotting into a screen that already exists rather than being invented
+alongside an upload flow.
+
+Two things this also fixes. `setDocumentCategory` shipped in PR-12 with a policy and tests and **no
+control**, which is the "capability with no interface" pattern this project has now hit four times;
+the detail screen is where it belongs. And `visibility` and `ai_processing` have been columns since
+PR-11 with no way to change them — same screen, same reason.
+
+Swapping 13 and 14 instead was considered and rejected: PR-14 is already the heaviest PR of the
+phase (bucket, `storage.objects` policies, the path function, picker, progress, storage RLS tests)
+and would still have had to invent a detail screen afterwards.
+
+### And then PR-13 found a hole, which changed the model
+
+Demoing the subject picker showed that **naming somebody in "About" granted them read *and write***
+— including the ability to publish a private document to the whole family. See the `docs/15` §8.4
+amendment for the mechanism.
+
+The correction, in migration `20260810090000`:
+
+- **Every document is private. Only its author reads, writes or deletes it** — not the family Owner,
+  not the person it is about.
+- **`member_id` is now a pure label**, renamed "Belongs to", with no permission effect whatsoever.
+- **`visibility` has no control.** The column keeps both values so PR-15 has somewhere to go, but
+  nothing in the UI can publish a document before sharing has been designed.
+- **PR-15 is un-vacated**, and is where "who can see this" gets thought through rather than falling
+  out of a subject column.
+
+The generalisable lesson, since Phases 4–6 reuse this table's shape: *"who is this record about"* and
+*"who may read this record"* are different questions. A column answering both is an escalation
+waiting to be noticed.
 
 ---
 

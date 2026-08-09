@@ -9,15 +9,21 @@ import {
   createDocument,
   deleteDocument,
   describeDocumentError,
+  describeDocumentAuthor,
   describeDocumentSubject,
   filterByCategory,
+  getDocument,
   isDocumentCategory,
   listDocuments,
   partitionDocuments,
+  renameDocument,
   setDocumentArchived,
+  setDocumentAiProcessing,
   setDocumentCategory,
+  setDocumentMember,
   validateDocumentTitle,
   type CreateDocumentInput,
+  type AiProcessing,
   type DocumentCategory,
   type DocumentGateway,
   type FamilyDocument,
@@ -48,7 +54,19 @@ function fakeGateway(overrides: Partial<DocumentGateway> = {}): DocumentGateway 
     async createDocument(input) {
       return { data: document({ title: input.title, category: input.category }), error: null };
     },
+    async getDocument() {
+      return { data: document(), error: null };
+    },
     async setCategory() {
+      return { error: null };
+    },
+    async setTitle() {
+      return { error: null };
+    },
+    async setMember() {
+      return { error: null };
+    },
+    async setAiProcessing() {
       return { error: null };
     },
     async archiveDocument() {
@@ -186,8 +204,10 @@ describe('createDocument', () => {
 
   it('defaults are decided by the database, not invented here', async () => {
     // The service passes undefined through; `documents` defaults visibility to
-    // 'family' and ai_processing to 'denied'. Duplicating those defaults in
-    // TypeScript is how the two drift apart.
+    // 'private' and ai_processing to 'denied'. Duplicating those defaults in
+    // TypeScript is how the two drift apart — and after 20260810090000 a stale
+    // client-side 'family' default would have been a privacy regression rather
+    // than a mismatch.
     let received: CreateDocumentInput | null = null;
     const gateway = fakeGateway({
       async createDocument(input) {
@@ -198,7 +218,6 @@ describe('createDocument', () => {
 
     await createDocument(gateway, { familyId: 'fam-1', title: 'Deed', category: 'property' });
 
-    expect(received!.visibility).toBeUndefined();
     expect(received!.aiProcessing).toBeUndefined();
   });
 });
@@ -405,6 +424,184 @@ describe('setDocumentCategory', () => {
   });
 });
 
+describe('getDocument', () => {
+  it('returns the document', async () => {
+    const result = await getDocument(fakeGateway(), 'doc-1');
+    expect(result).toEqual({ ok: true, document: document() });
+  });
+
+  it('distinguishes a hidden row from a failure', async () => {
+    // No error and no data: the row exists and can_see_record declined to hand
+    // it back. That is what privacy looks like from outside, not a fault, so it
+    // must not be reported with an error message the user could act on.
+    const gateway = fakeGateway({
+      async getDocument() {
+        return { data: null, error: null };
+      },
+    });
+
+    expect(await getDocument(gateway, 'doc-1')).toEqual({
+      ok: false,
+      message: 'That document is no longer available.',
+    });
+  });
+
+  it('translates a genuine failure', async () => {
+    const gateway = fakeGateway({
+      async getDocument() {
+        return { data: null, error: { message: 'network request failed' } };
+      },
+    });
+
+    expect(await getDocument(gateway, 'doc-1')).toEqual({
+      ok: false,
+      message: 'Cannot reach the server. Check your connection and try again.',
+    });
+  });
+});
+
+describe('renameDocument', () => {
+  it('applies the same rule as filing, so a bad title cannot arrive by editing', async () => {
+    const setTitleSpy = jest.fn();
+    const gateway = fakeGateway({ setTitle: setTitleSpy });
+
+    const result = await renameDocument(gateway, 'doc-1', '   ');
+
+    expect(result).toEqual({ ok: false, message: 'Give this document a name.' });
+    expect(setTitleSpy).not.toHaveBeenCalled();
+  });
+
+  it('trims before storing', async () => {
+    let received: string | null = null;
+    const gateway = fakeGateway({
+      async setTitle(_id, title) {
+        received = title;
+        return { error: null };
+      },
+    });
+
+    await renameDocument(gateway, 'doc-1', '  Property Deed  ');
+
+    expect(received).toBe('Property Deed');
+  });
+
+  it('rejects a title past the limit', async () => {
+    const result = await renameDocument(
+      fakeGateway(),
+      'doc-1',
+      'a'.repeat(MAX_DOCUMENT_TITLE_LENGTH + 1),
+    );
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('setDocumentAiProcessing', () => {
+  it.each([...AI_PROCESSING_MODES])('accepts %s', async (mode) => {
+    let received: string | null = null;
+    const gateway = fakeGateway({
+      async setAiProcessing(_id, value) {
+        received = value;
+        return { error: null };
+      },
+    });
+
+    expect(await setDocumentAiProcessing(gateway, 'doc-1', mode)).toEqual({ ok: true });
+    expect(received).toBe(mode);
+  });
+
+  it('refuses a value outside the vocabulary', async () => {
+    const result = await setDocumentAiProcessing(
+      fakeGateway(),
+      'doc-1',
+      'sometimes' as AiProcessing,
+    );
+    expect(result).toEqual({ ok: false, message: 'That privacy setting is not recognised.' });
+  });
+});
+
+describe('setDocumentMember', () => {
+  it('names the person a document is about', async () => {
+    let received: string | null | undefined;
+    const gateway = fakeGateway({
+      async setMember(_id, memberId) {
+        received = memberId;
+        return { error: null };
+      },
+    });
+
+    expect(await setDocumentMember(gateway, 'doc-1', 'p-dad')).toEqual({ ok: true });
+    expect(received).toBe('p-dad');
+  });
+
+  it('hands a document back to the household with null', async () => {
+    // Not an absence of data — a deed belongs to no one person, and null is how
+    // that is said.
+    let received: string | null | undefined = 'unset';
+    const gateway = fakeGateway({
+      async setMember(_id, memberId) {
+        received = memberId;
+        return { error: null };
+      },
+    });
+
+    await setDocumentMember(gateway, 'doc-1', null);
+
+    expect(received).toBeNull();
+  });
+
+  it('translates a subject who has left the family', async () => {
+    const gateway = fakeGateway({
+      async setMember() {
+        return {
+          error: { message: 'violates foreign key constraint "documents_member_id_family_id_fkey"' },
+        };
+      },
+    });
+
+    expect(await setDocumentMember(gateway, 'doc-1', 'p-gone')).toEqual({
+      ok: false,
+      message: 'That person is no longer in this family.',
+    });
+  });
+});
+
+describe('describeDocumentAuthor', () => {
+  const people = [
+    { userId: 'u-ankit', displayName: 'Ankit' },
+    { userId: 'u-priya', displayName: 'Priya' },
+  ];
+
+  it('says You when it is the reader', () => {
+    expect(describeDocumentAuthor(document(), people, 'u-ankit')).toBe('You');
+  });
+
+  it('names somebody else', () => {
+    expect(describeDocumentAuthor(document({ createdBy: 'u-priya' }), people, 'u-ankit')).toBe(
+      'Priya',
+    );
+  });
+
+  it('degrades to Someone when the account is gone', () => {
+    // created_by is `on delete set null`, and a deleted account does not undo
+    // the filing. Rendering an id, or dropping the line, would both be worse.
+    expect(describeDocumentAuthor(document({ createdBy: null }), people, 'u-ankit')).toBe(
+      'Someone',
+    );
+    expect(describeDocumentAuthor(document({ createdBy: 'u-ghost' }), people, 'u-ankit')).toBe(
+      'Someone',
+    );
+  });
+
+  it('is not the same question as who it is about', () => {
+    // The distinction the detail screen exists to make visible: Priya filed
+    // Dad's passport, so the author is Priya and the subject is Dad.
+    const doc = document({ createdBy: 'u-priya', memberId: 'p-dad' });
+
+    expect(describeDocumentAuthor(doc, people, 'u-ankit')).toBe('Priya');
+    expect(describeDocumentSubject(doc, new Map([['p-dad', 'Dad']]))).toBe('Dad');
+  });
+});
+
 describe('filterByCategory', () => {
   const passport = document({ id: 'a', category: 'identity' });
   const report = document({ id: 'b', category: 'medical' });
@@ -453,6 +650,12 @@ describe('the vocabularies mirror the database', () => {
 
   it.each([...DOCUMENT_VISIBILITIES])('visibility accepts %s', (value) => {
     expect(['family', 'private']).toContain(value);
+  });
+
+  it('keeps family in the vocabulary even though nothing sets it', () => {
+    // The column still allows it so PR-15 has somewhere to put sharing. If this
+    // ever becomes reachable again, the RLS suite is what must be updated first.
+    expect(DOCUMENT_VISIBILITIES).toContain('family');
   });
 
   it('defaults AI processing to denied, because consent never given is not consent', () => {

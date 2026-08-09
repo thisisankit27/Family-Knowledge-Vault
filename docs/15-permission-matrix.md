@@ -452,6 +452,24 @@ using (public.can_see_record(family_id, visibility, member_id, created_by)
 - And it is reversible. Owner visibility is `or public.can_manage_family(target_family)` — one line,
   in one function. Choosing the strict reading now forecloses nothing.
 
+> **Amended 2026-08-09 — `documents` went further, and for a reason worth recording.**
+>
+> §8.3 grants a private record to its author **or its subject**. PR-11's `documents` table paired
+> that with an UPDATE policy of `can_see_record(...) and can_write_records(...)`, so **seeing implied
+> editing**: naming somebody in the subject field handed them write access to a document they had not
+> filed — including the ability to set `visibility` back to `'family'` and publish it to the
+> household. Found on a device during the PR-13 demo, not by the 35 RLS tests, several of which were
+> asserting the buggy behaviour was correct.
+>
+> Migration `20260810090000` corrects it: **every document is private, and only its author may read,
+> write or delete it.** The mechanism is one argument rather than a rewrite — the documents policies
+> pass **`null`** in the subject position, so the §8.3 subject branch cannot match. **This function is
+> unchanged**, and Phase 4–6 record tables still get the subject branch if they want it.
+>
+> The lesson generalises beyond this table: *"who is this record about"* and *"who may read this
+> record"* are different questions, and a column answering both is a privilege escalation waiting for
+> someone to notice. Sharing is designed properly in PR-15.
+
 ## 8.5 Defaults
 
 **`family` everywhere in v1, including Medical.** "Mum's medications" is exactly what a household
