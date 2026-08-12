@@ -1,12 +1,17 @@
 import {
   ALLOWED_MIME_TYPES,
   MAX_FILE_BYTES,
+  SIGNED_URL_TTL_SECONDS,
   describeStorageError,
+  downloadFilenameFor,
+  fileUrl,
   extensionFor,
   formatBytes,
   isAllowedMimeType,
+  isPreviewable,
   listDocumentFiles,
   removeDocumentFile,
+  shareDocumentFile,
   uploadDocumentFile,
   validateFile,
   type DocumentFile,
@@ -57,6 +62,9 @@ function fakeGateway(overrides: Partial<StorageGateway> = {}): StorageGateway {
     },
     async detachFile() {
       return { error: null };
+    },
+    async createSignedUrl() {
+      return { data: 'https://example.test/signed/abc.jpg?token=x', error: null };
     },
     ...overrides,
   };
@@ -383,3 +391,181 @@ describe('removeDocumentFile', () => {
     });
   });
 });
+
+
+describe('isPreviewable', () => {
+  it.each([...ALLOWED_MIME_TYPES])('decides for %s', (mime) => {
+    // Table-driven over the allow-list so a type added in Phase 4 — audio,
+    // video — fails here rather than rendering a blank box on a device.
+    expect(typeof isPreviewable(mime)).toBe('boolean');
+  });
+
+  it('shows images in-app', () => {
+    for (const mime of ['image/jpeg', 'image/png', 'image/heic', 'image/webp']) {
+      expect(isPreviewable(mime)).toBe(true);
+    }
+  });
+
+  it('does not claim to render PDFs', () => {
+    // Android's WebView cannot, and pretending otherwise would show a blank box
+    // on the platform this project demos on.
+    expect(isPreviewable('application/pdf')).toBe(false);
+  });
+
+  it('refuses anything outside the allow-list', () => {
+    expect(isPreviewable('image/gif')).toBe(false);
+    expect(isPreviewable('video/mp4')).toBe(false);
+  });
+});
+
+describe('fileUrl', () => {
+  it('mints a URL for the stored identifier', async () => {
+    let received: { path: string; ttl: number } | null = null;
+    const gateway = fakeGateway({
+      async createSignedUrl(path, expiresInSeconds) {
+        received = { path, ttl: expiresInSeconds };
+        return { data: 'https://example.test/signed', error: null };
+      },
+    });
+
+    const result = await fileUrl(gateway, documentFile());
+
+    expect(result).toEqual({ ok: true, url: 'https://example.test/signed' });
+    // The accessor takes the row and reads providerFileId itself, so no caller
+    // can hand it a path they built — path construction is the database's job.
+    expect(received!.path).toBe('fam-1/doc-1/abc.jpg');
+    expect(received!.ttl).toBe(SIGNED_URL_TTL_SECONDS);
+  });
+
+  it('translates a refusal rather than returning a broken URL', async () => {
+    const gateway = fakeGateway({
+      async createSignedUrl() {
+        return { data: null, error: { message: 'permission denied for table objects' } };
+      },
+    });
+
+    expect(await fileUrl(gateway, documentFile())).toEqual({
+      ok: false,
+      message: 'You do not have permission to do that.',
+    });
+  });
+
+  it('reports a missing URL as unavailable, not as success', async () => {
+    const gateway = fakeGateway({
+      async createSignedUrl() {
+        return { data: null, error: null };
+      },
+    });
+
+    const result = await fileUrl(gateway, documentFile());
+
+    expect(result).toEqual({ ok: false, message: 'That file is no longer available.' });
+  });
+});
+
+describe('downloadFilenameFor', () => {
+  it('gives back the name the user recognised', () => {
+    // The stored name is a uuid so no user input reaches a storage path. It
+    // becomes a filename again only here, where it stops being a path.
+    expect(downloadFilenameFor(documentFile())).toBe('passport.jpg');
+  });
+
+  it('falls back to a name with the right extension', () => {
+    // Not "file": an extensionless download is one the receiving app cannot open.
+    expect(downloadFilenameFor(documentFile({ originalFilename: null }))).toBe('document.jpg');
+    expect(
+      downloadFilenameFor(
+        documentFile({ originalFilename: null, mimeType: 'application/pdf' }),
+      ),
+    ).toBe('document.pdf');
+  });
+});
+
+describe('shareDocumentFile', () => {
+  const download = async () => 'file:///cache/passport.jpg';
+  const share = async () => undefined;
+
+  it('mints, downloads, then shares — in that order', async () => {
+    const calls: string[] = [];
+    const gateway = fakeGateway({
+      async createSignedUrl() {
+        calls.push('mint');
+        return { data: 'https://example.test/signed', error: null };
+      },
+    });
+
+    const result = await shareDocumentFile(
+      gateway,
+      documentFile(),
+      async (url) => {
+        calls.push(`download:${url}`);
+        return 'file:///cache/passport.jpg';
+      },
+      async () => {
+        calls.push('share');
+      },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual(['mint', 'download:https://example.test/signed', 'share']);
+  });
+
+  it('does not download when the URL cannot be minted', async () => {
+    const downloadSpy = jest.fn();
+    const gateway = fakeGateway({
+      async createSignedUrl() {
+        return { data: null, error: { message: 'permission denied' } };
+      },
+    });
+
+    const result = await shareDocumentFile(gateway, documentFile(), downloadSpy, share);
+
+    expect(result.ok).toBe(false);
+    expect(downloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not share when the download failed', async () => {
+    const shareSpy = jest.fn();
+    const failing = async () => {
+      throw new Error('network');
+    };
+
+    const result = await shareDocumentFile(gateway_(), documentFile(), failing, shareSpy);
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'That file could not be downloaded. Try again.',
+    });
+    expect(shareSpy).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a failed sheet from a failed download', async () => {
+    // Different messages because the remedies differ: one means try again, the
+    // other means the file is already on the device and the sheet misbehaved.
+    const result = await shareDocumentFile(gateway_(), documentFile(), download, async () => {
+      throw new Error('no activity found');
+    });
+
+    expect(result).toEqual({ ok: false, message: 'That file could not be opened. Try again.' });
+  });
+
+  it('passes the original filename to the downloader', async () => {
+    let named: string | null = null;
+    await shareDocumentFile(
+      gateway_(),
+      documentFile(),
+      async (_url, filename) => {
+        named = filename;
+        return 'file:///cache/passport.jpg';
+      },
+      share,
+    );
+
+    expect(named).toBe('passport.jpg');
+  });
+});
+
+/** A gateway with nothing overridden, for the share tests. */
+function gateway_(): StorageGateway {
+  return fakeGateway();
+}

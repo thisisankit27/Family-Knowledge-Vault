@@ -70,6 +70,27 @@ export function extensionFor(mimeType: string): string | null {
   return isAllowedMimeType(mimeType) ? EXTENSIONS[mimeType] : null;
 }
 
+/**
+ * Whether this app can show the file itself, or has to hand it to something
+ * that can.
+ *
+ * Images yes; PDFs no, and the reason is a platform fact rather than a
+ * preference: **Android's WebView cannot render a PDF.** iOS can, but building
+ * a preview that works on one platform and silently fails on the other — the
+ * one the project demos on — is worse than being straightforward about it.
+ *
+ * The tempting escape is Google's document viewer, which takes a URL and
+ * returns a rendered page. It is not a trade-off to weigh: it would send a
+ * family's private documents to Google, which for this product is
+ * disqualifying.
+ *
+ * So a PDF opens in whatever reader the user already trusts. Phase 10's dev
+ * build, or a bundled `pdf.js`, could revisit this.
+ */
+export function isPreviewable(mimeType: string): boolean {
+  return isAllowedMimeType(mimeType) && mimeType !== 'application/pdf';
+}
+
 export interface DocumentFile {
   id: string;
   documentId: string;
@@ -161,6 +182,16 @@ export function describeStorageError(message: string): string {
   return message;
 }
 
+/**
+ * How long a minted URL lasts.
+ *
+ * Long enough to open a file and read it; short enough that a URL which escapes
+ * — copied from a log, left in a screenshot of a debugger — stops working
+ * before it can be passed around. Nothing stores one, so nothing needs it to
+ * outlive the screen that asked.
+ */
+export const SIGNED_URL_TTL_SECONDS = 300;
+
 export type UploadProgress = (fraction: number) => void;
 
 export interface StorageGateway {
@@ -181,6 +212,7 @@ export interface StorageGateway {
   listFiles(documentId: string): Promise<GatewayResult<DocumentFile[]>>;
   removeObject(path: string): Promise<{ error: { message: string } | null }>;
   detachFile(fileId: string): Promise<{ error: { message: string } | null }>;
+  createSignedUrl(path: string, expiresInSeconds: number): Promise<GatewayResult<string>>;
 }
 
 export type AttachOutcome =
@@ -300,6 +332,99 @@ export async function removeDocumentFile(
   if (detached.error) return { ok: false, message: describeStorageError(detached.error.message) };
 
   return { ok: true };
+}
+
+/**
+ * A URL for a file, minted now and not kept.
+ *
+ * This is the accessor `docs/17` §10.1 asked for and every PR since has
+ * deferred: *"never store a URL — store the identifier and mint on demand"*,
+ * and *"signed-URL expiry must not reach the components."*
+ *
+ * Both rules are about the same leak. A URL in a row bakes the provider's
+ * domain and its TTL into the data; a URL held in component state spreads a
+ * Supabase concept — that links go stale — into screens that should only know
+ * about files. Taking the row rather than a path is the other half: no caller
+ * can hand this a path it constructed, because building paths is the database's
+ * job (`allocate_document_file_path`).
+ *
+ * Authorisation is inherited, not re-implemented. `createSignedUrl` goes through
+ * the storage SELECT policy, so only the document's author gets a URL at all.
+ */
+export async function fileUrl(
+  gateway: StorageGateway,
+  file: DocumentFile,
+): Promise<{ ok: true; url: string } | { ok: false; message: string }> {
+  const { data, error } = await gateway.createSignedUrl(
+    file.providerFileId,
+    SIGNED_URL_TTL_SECONDS,
+  );
+
+  if (error) return { ok: false, message: describeStorageError(error.message) };
+  if (!data) return { ok: false, message: 'That file is no longer available.' };
+
+  return { ok: true, url: data };
+}
+
+/**
+ * Get a file out of the vault and into the user's hands.
+ *
+ * FR-014 calls this "Download", which is a desktop-shaped word. On a phone
+ * there is no folder the user thinks of as theirs — the honest equivalent is
+ * the share sheet, which covers every reason somebody wants a document out:
+ * saving to Files, sending it to a doctor, printing it, or opening it in a
+ * reader that can display it.
+ *
+ * That last one is why PDFs use this path as their *primary* action rather than
+ * a fallback. There is no in-app preview for them (see `isPreviewable`), so the
+ * share sheet is how a PDF gets read at all.
+ *
+ * The download and the share are injected rather than imported so this stays
+ * testable without a device — the same reason `uploadDocumentFile` takes
+ * `readBytes`.
+ */
+export async function shareDocumentFile(
+  gateway: StorageGateway,
+  file: DocumentFile,
+  download: (url: string, filename: string) => Promise<string>,
+  share: (localUri: string, mimeType: string) => Promise<void>,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const minted = await fileUrl(gateway, file);
+  if (!minted.ok) return minted;
+
+  let localUri: string;
+  try {
+    localUri = await download(minted.url, downloadFilenameFor(file));
+  } catch {
+    return { ok: false, message: 'That file could not be downloaded. Try again.' };
+  }
+
+  try {
+    await share(localUri, file.mimeType);
+  } catch {
+    // The sheet failing is different from the download failing, and saying so
+    // saves the user re-downloading something already on their device.
+    return { ok: false, message: 'That file could not be opened. Try again.' };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * What the file is called once it leaves.
+ *
+ * The stored name is a uuid — deliberately, so no user input reaches a storage
+ * path (`docs/15` §9.1). But a uuid in somebody's Downloads folder is useless,
+ * so the *original* name comes back at the point it stops being a path and
+ * starts being a filename again.
+ *
+ * Falls back to the document's kind plus the right extension, because "file"
+ * with no extension is a file the receiving app will not know how to open.
+ */
+export function downloadFilenameFor(file: DocumentFile): string {
+  if (file.originalFilename) return file.originalFilename;
+  const extension = extensionFor(file.mimeType) ?? 'bin';
+  return `document.${extension}`;
 }
 
 interface DocumentFileRow {
@@ -423,6 +548,14 @@ export function createSupabaseStorageGateway(
 
     // A plain delete, unlike attach. There is no precondition beyond the policy
     // — see the migration's §5b on why DELETE is granted where INSERT is not.
+    async createSignedUrl(path, expiresInSeconds) {
+      const { data, error } = await client.storage
+        .from(FILE_BUCKET)
+        .createSignedUrl(path, expiresInSeconds);
+
+      return { data: data?.signedUrl ?? null, error };
+    },
+
     async detachFile(fileId) {
       const { error } = await client.from('document_files').delete().eq('id', fileId);
       return { error };
