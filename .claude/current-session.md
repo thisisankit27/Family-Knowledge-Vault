@@ -1661,3 +1661,103 @@ table's shape, so this is the third time a Phase-3 shortcut would have been take
 
 **PR-14 Upload.** Bucket, `storage.objects` policies, the path-constructing function, picker,
 progress (NFR-007), storage RLS tests. Likely needs splitting — it is the heaviest PR of the phase.
+
+---
+---
+
+# PR-14a Complete — Upload, bytes in (2026-08-11)
+
+**416 CI tests, 212 RLS tests, fourteen migrations.** The first bytes this project stores.
+
+## Split
+
+**14a is bytes in** — bucket, storage policies, path allocator, picker, upload with a real
+percentage. **14b is bytes out** — preview and download, FR-014's last two actions, landing in a
+detail screen that already exists.
+
+## The frozen storage predicate was unsafe, and this is where it was corrected
+
+`docs/15` §9.1 specified `has_family_access((storage.foldername(name))[1]::uuid)` — tenant-level and
+**role-blind**, written when documents were family-visible. After PR-13 made every document
+author-only, it would have let any family member fetch the bytes of a row they cannot read. §9.1's
+own sentence is the indictment: *"an invisible row does not make its file unreachable."*
+
+**The policies now also check the author on segment 2**, via `owns_document_object(name)` — a
+`SECURITY DEFINER` helper, because joins inside policy bodies are where storage RLS goes slow. §9.1
+pinned segment 1 as unchanged; it never forbade adding conjuncts.
+
+Five RLS tests exist purely for this: a second member of the *same family* refused an upload, a
+download, a listing, a removal, and a file row. Every one would have passed under the frozen
+predicate.
+
+## Two things the platform taught, both found by tests rather than reasoning
+
+**1. `storage.objects` defends itself, and the first backstop trigger broke family deletion.**
+Supabase ships `protect_objects_delete`, raising *"Direct deletion from storage tables is not
+allowed"* unless `storage.allow_delete_query` is set. Deleting a family cascaded to documents, fired
+the trigger, hit the guard, and rolled the whole delete back — **families quietly became
+undeletable**, the same shape as PR-7, PR-9a and PR-10, arriving from a direction none of them came
+from. The setting is the platform's own escape hatch and is now set transaction-locally.
+
+**2. `unique (document_id, kind, version)` blocked multiple attachments.** A passport is one document
+with two pages; that constraint forced the second page to claim it *superseded* the first. `version`
+still means revision and stays at 1; uniqueness moved to the object.
+
+## Decisions taken
+
+| | |
+|---|---|
+| **Progress** | Real percentage via `XMLHttpRequest`. supabase-js exposes none on React Native, and a bar on a timer would be a lie NFR-007 does not ask for |
+| **Files per document** | Several |
+| **Orphans** | Client deletes first; trigger backstops the cascade no screen sees |
+| **`base64-arraybuffer`** | **Not needed.** SDK 54's `new File(uri).bytes()` returns a `Uint8Array` — Supabase's own RN guide predates that API |
+
+## The two-phase write, and why the order is that way
+
+Allocate → upload → attach. The row is written **after** the object exists, and
+`attach_document_file` *verifies* it rather than trusting it — possible only because
+`storage.objects` is an ordinary table. PR-11 wanted exactly this when it withheld an INSERT policy.
+
+`document_files` therefore still has **no INSERT policy and no INSERT grant**; the RPC is the only
+writer, and the PR-11 test asserting it is unwritable stays green.
+
+A failed attach orphans an object: quota spent, nothing readable. Chosen over the reverse, where a
+row would describe bytes that are not there — a catalogue that lies is worse than one that wastes.
+
+## Deliberate gaps
+
+- **Preview and download** — 14b, with `react-native-webview`.
+- **Orphaned bytes.** The trigger removes rows, not bytes; Phase 12 sweeps by diffing a bucket
+  listing against `document_files.provider_file_id`, which stays computable however many rows go.
+  Privacy is unaffected — `owns_document_object` resolves through a `documents` row that is gone.
+- **Thumbnails** deferred; `kind` reserves the slot.
+- **Replacing a file** — `version` increments in principle, no interface reaches it.
+- `mime_type` has no check constraint on `document_files`; the allow-list lives on the bucket and in
+  `validateFile`. A third copy was not worth it.
+
+## Two more bugs, both found on the device after the suite was green
+
+**1. The remove button removed half a file.** It deleted the storage object and left the
+`document_files` row, so the file reappeared on the next read. `document_files` also had no DELETE
+policy and no grant — INSERT was withheld deliberately (a row must not describe bytes that are not
+there) and that reasoning has no delete equivalent, so its absence was simply an omission.
+
+**21 storage RLS tests passed while this was broken.** Every one asserted the *object* was gone;
+not one re-listed the rows. The same shape as PR-13's escalation — **the tests encoded the
+assumption rather than the requirement.** Three regression tests now cover it, including a
+before-and-after row count.
+
+**2. Android dialogs take at most three buttons.** The source chooser passed four — camera, library,
+files, cancel — so Cancel was silently dropped and hardware-back was the only way out. Replaced with
+an inline chooser, which is more discoverable anyway: the three sources are visible before
+committing to any of them.
+
+## A recurring operational note
+
+**The LAN IP changed mid-session** (`192.168.29.40` → `10.206.245.211`) and every RLS test failed
+with `fetch failed`. Exactly what the environment checkpoint warned about. When tests or the phone
+suddenly cannot reach the stack, check `ip -4 addr` against `.env.local` **first**.
+
+## Next
+
+**PR-14b** — preview and download. Then PR-15, sharing.

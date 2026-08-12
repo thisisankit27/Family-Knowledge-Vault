@@ -1,12 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import { File as DeviceFile } from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '../../../../src/components/Button';
+import { ProgressBar } from '../../../../src/components/ProgressBar';
 import { LockedNotice } from '../../../../src/components/LockedNotice';
 import { TextField } from '../../../../src/components/TextField';
 import { formatRelativeTime } from '../../../../src/lib/relativeTime';
+import { getSupabaseEnv } from '../../../../src/lib/env';
 import { getSupabase } from '../../../../src/lib/supabase';
 import { useAuth } from '../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../src/providers/FamilyProvider';
@@ -29,6 +34,15 @@ import {
   type FamilyDocument,
 } from '../../../../src/services/document';
 import { createSupabaseMemberGateway, listMembers, type Member } from '../../../../src/services/member';
+import {
+  createSupabaseStorageGateway,
+  formatBytes,
+  listDocumentFiles,
+  removeDocumentFile,
+  uploadDocumentFile,
+  type DocumentFile,
+  type UploadCandidate,
+} from '../../../../src/services/storage';
 import { canWriteRecords } from '../../../../src/services/role';
 import { theme } from '../../../../src/theme';
 
@@ -160,6 +174,10 @@ export default function DocumentDetailScreen() {
           {describeDocumentAuthor(document, people, session?.user.id ?? null)} ·{' '}
           {formatRelativeTime(document.createdAt)}
         </Text>
+      </Field>
+
+      <Field label="Files">
+        <Attachments documentId={document.id} canEdit={canEdit} />
       </Field>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -405,6 +423,260 @@ function SubjectPicker({
   );
 }
 
+/**
+ * Turns whichever picker the user chose into one shape the service understands.
+ *
+ * **Both pickers report `mimeType` and size as optional**, which is easy to miss
+ * and awkward to discover on a device — an Android gallery will hand back a HEIC
+ * with no MIME type at all. The size comes from the file itself rather than the
+ * picker's guess, since it is the number the 10MB check depends on.
+ *
+ * A missing MIME type is refused rather than guessed. Inferring it from the
+ * filename would put user input back into a decision the path contract works
+ * hard to keep it out of.
+ */
+function toCandidate(asset: {
+  uri: string;
+  mimeType?: string | null;
+  name?: string | null;
+}): UploadCandidate | { error: string } {
+  if (!asset.mimeType) {
+    return { error: 'That file did not say what kind it is. Try a photo or a PDF.' };
+  }
+
+  let sizeBytes: number | null = null;
+  try {
+    sizeBytes = new DeviceFile(asset.uri).size;
+  } catch {
+    sizeBytes = null;
+  }
+
+  if (sizeBytes === null || sizeBytes <= 0) {
+    return { error: 'That file could not be read from your device.' };
+  }
+
+  return {
+    uri: asset.uri,
+    mimeType: asset.mimeType,
+    sizeBytes,
+    originalFilename: asset.name ?? null,
+  };
+}
+
+/**
+ * The files attached to a document, and the way to add one.
+ *
+ * A document can hold several — a passport is one document with two pages, and
+ * PR-14's migration replaced `unique (document_id, kind, version)` with a
+ * uniqueness on the object itself so that stops meaning "the front was
+ * superseded by the back".
+ *
+ * Names and sizes are shown because a person choosing between two scans needs
+ * to tell them apart. That is not the same as the *card* in the library
+ * becoming "1 file, 2.4 MB" — `docs/10` §13 governs the list, not this.
+ */
+function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boolean }) {
+  const [files, setFiles] = useState<DocumentFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const gateway = () => createSupabaseStorageGateway(getSupabase(), { url: getSupabaseEnv().url });
+
+  const load = useCallback(async () => {
+    const result = await listDocumentFiles(gateway(), documentId);
+    if (!result.ok) {
+      setError(result.message);
+    } else {
+      setError(null);
+      setFiles(result.files);
+    }
+    setLoading(false);
+  }, [documentId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  async function attach(candidate: UploadCandidate) {
+    setError(null);
+    setProgress(0);
+    try {
+      const result = await uploadDocumentFile(
+        gateway(),
+        documentId,
+        candidate,
+        async (uri) => new DeviceFile(uri).bytes(),
+        setProgress,
+      );
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      await load();
+    } finally {
+      setProgress(null);
+    }
+  }
+
+  async function pickFrom(source: 'camera' | 'library' | 'files') {
+    if (source === 'files') {
+      const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+      if (picked.canceled || !picked.assets[0]) return;
+      const candidate = toCandidate(picked.assets[0]);
+      if ('error' in candidate) return setError(candidate.error);
+      return attach(candidate);
+    }
+
+    // Permission is requested at the moment it is needed rather than on mount:
+    // a prompt that appears before the user has asked for anything reads as the
+    // app taking, not the user giving.
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setError(
+        source === 'camera'
+          ? 'Camera access is off. Turn it on in Settings to photograph a document.'
+          : 'Photo access is off. Turn it on in Settings to choose a photo.',
+      );
+      return;
+    }
+
+    const picked =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'] })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'] });
+
+    if (picked.canceled || !picked.assets[0]) return;
+    const asset = picked.assets[0];
+    const candidate = toCandidate({
+      uri: asset.uri,
+      mimeType: asset.mimeType,
+      name: asset.fileName,
+    });
+    if ('error' in candidate) return setError(candidate.error);
+    return attach(candidate);
+  }
+
+  function confirmRemove(file: DocumentFile) {
+    Alert.alert(`Remove this file?`, 'The document stays; only the file goes.', [
+      { text: 'Keep it', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            const result = await removeDocumentFile(gateway(), file);
+            if (!result.ok) {
+              setError(result.message);
+              return;
+            }
+            await load();
+          })();
+        },
+      },
+    ]);
+  }
+
+  if (loading) return <ActivityIndicator color={theme.colors.primary} />;
+
+  return (
+    <>
+      {files.map((file) => (
+        <View key={file.id} style={styles.fileRow}>
+          <Ionicons
+            name={file.mimeType === 'application/pdf' ? 'document-text-outline' : 'image-outline'}
+            size={20}
+            color={theme.colors.textMuted}
+          />
+          <View style={styles.fileText}>
+            <Text style={styles.value}>{file.originalFilename ?? 'Photo'}</Text>
+            <Text style={styles.hint}>
+              {formatBytes(file.sizeBytes)} · {formatRelativeTime(file.createdAt)}
+            </Text>
+          </View>
+          {canEdit ? (
+            <Pressable
+              onPress={() => confirmRemove(file)}
+              accessibilityRole="button"
+              accessibilityLabel="Remove file"
+            >
+              <Ionicons name="close-outline" size={20} color={theme.colors.textMuted} />
+            </Pressable>
+          ) : null}
+        </View>
+      ))}
+
+      {files.length === 0 && progress === null ? (
+        <Text style={styles.hint}>Nothing attached yet.</Text>
+      ) : null}
+
+      {/*
+        An inline chooser rather than Alert.alert, and not for taste: **Android's
+        dialog takes at most three buttons.** Four — camera, library, files,
+        cancel — silently dropped the cancel, leaving no way out of the sheet
+        except the hardware back button. Found on a device.
+
+        Inline also means the three sources are visible before committing to
+        anything, which is the more discoverable arrangement anyway.
+      */}
+      {progress !== null ? (
+        <ProgressBar fraction={progress} label="Uploading" />
+      ) : !canEdit ? null : choosing ? (
+        <View style={styles.sourceList}>
+          {(
+            [
+              ['camera', 'camera-outline', 'Take a photo'],
+              ['library', 'images-outline', 'Choose a photo'],
+              ['files', 'document-outline', 'Choose a file'],
+            ] as const
+          ).map(([source, icon, label]) => (
+            <Pressable
+              key={source}
+              onPress={() => {
+                setChoosing(false);
+                void pickFrom(source);
+              }}
+              style={styles.addFile}
+              accessibilityRole="button"
+            >
+              <Ionicons name={icon} size={18} color={theme.colors.primary} />
+              <Text style={styles.addFileText}>{label}</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            onPress={() => setChoosing(false)}
+            style={styles.addFile}
+            accessibilityRole="button"
+          >
+            <Ionicons name="close-outline" size={18} color={theme.colors.textMuted} />
+            <Text style={styles.cancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable
+          onPress={() => {
+            setError(null);
+            setChoosing(true);
+          }}
+          style={styles.addFile}
+          accessibilityRole="button"
+        >
+          <Ionicons name="add-circle-outline" size={18} color={theme.colors.primary} />
+          <Text style={styles.addFileText}>Add a file</Text>
+        </Pressable>
+      )}
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </>
+  );
+}
+
 function CategoryPicker({
   document,
   onSaved,
@@ -588,6 +860,35 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.body,
     textAlign: 'center',
     paddingVertical: theme.spacing.sm,
+  },
+  fileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+  },
+  fileText: {
+    flex: 1,
+  },
+  addFile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+    paddingVertical: theme.spacing.sm,
+  },
+  addFileText: {
+    color: theme.colors.primary,
+    fontSize: theme.typography.body,
+  },
+  cancelText: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.body,
+  },
+  sourceList: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    marginTop: theme.spacing.sm,
+    paddingTop: theme.spacing.xs,
   },
   error: {
     color: theme.colors.error,
