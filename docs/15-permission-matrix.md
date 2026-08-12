@@ -499,6 +499,35 @@ expensive.
 > **Segment 1 is unchanged, so the `has_family_access` predicate above is untouched.** This refines
 > the contract; it does not violate it. Everything else in §9.1 stands.
 
+> **Amended again 2026-08-11 — the predicate itself was no longer safe.**
+>
+> `has_family_access((storage.foldername(name))[1]::uuid)` is tenant-level and **role-blind**. It was
+> written when documents were family-visible by default, and §8.4's amendment made every document
+> author-only. Under that model the frozen predicate would have let any family member fetch the bytes
+> of a document whose row they cannot read — the exact failure the paragraph above names: *"an
+> invisible row does not make its file unreachable."*
+>
+> Confidentiality would then have rested entirely on never minting a URL. That is a promise kept by
+> code in a place where a policy was available, and this project has already paid once for preferring
+> the promise (PR-11's UPDATE policy, §8.4).
+>
+> **`20260811090000_document_storage.sql` adds an author conjunct.** Segment 1 still carries the
+> tenant and is still checked; segment 2 carries the document id, and the policy now also requires
+> `created_by = auth.uid()` on it. The work is in a `SECURITY DEFINER` helper —
+> `public.owns_document_object(name)` — rather than inline, because joins inside policy bodies are
+> where storage RLS goes slow.
+>
+> This section pinned segment 1 as unchanged. It never forbade *adding* conjuncts, and adding one is
+> what a frozen contract is supposed to allow.
+>
+> **Two things went with it**, both worth knowing before Phase 4 reuses this shape. `document_files`
+> still has no INSERT policy and no INSERT grant: `attach_document_file` is the only writer, and
+> because `storage.objects` is an ordinary table it can *verify the object exists* rather than trust
+> that it does — which is what PR-11 wanted when it withheld the policy. And an `after delete`
+> trigger on `documents` removes the matching `storage.objects` rows, catching the cascade a client
+> never sees when a whole family is deleted. It clears metadata, not the backing bytes; those wait
+> for Phase 12's Storage Management, which is a quota cost rather than a privacy one.
+
 **9.2 Any view over a record table must be `with (security_invoker = true)`** *(Phase 8)*
 Otherwise it executes as its owner and bypasses RLS **entirely**. This is the classic Supabase
 footgun and search is where it will first be reached for.

@@ -129,10 +129,14 @@ Nothing in the repository named any of these. They were the brief's real work:
 | **Thumbnails** | **Deferred** (Supabase image transformation is Pro-only). The *slot* is created now: `document_files.kind in ('original','thumbnail')`, so adding them later is rows rather than a migration of every file |
 | **Filename sanitisation** | **Dissolved, not solved.** The stored name is never user-supplied — see the §3.1 amendment |
 
-**The bucket is created by the PR-11 migration, not by `config.toml`.** A `[storage.buckets.*]`
-block provisions the *local* stack only; production would be missing it, and the divergence would
-surface as a failed upload after deploy. `insert into storage.buckets (…)` in a migration provisions
-both and travels with `db push` — the append-only migration rule, applied to storage.
+**The bucket is created by a migration, not by `config.toml`.** A `[storage.buckets.*]` block
+provisions the *local* stack only; production would be missing it, and the divergence would surface
+as a failed upload after deploy. `insert into storage.buckets (…)` in a migration provisions both and
+travels with `db push` — the append-only migration rule, applied to storage.
+
+> **Built 2026-08-11 in `20260811090000_document_storage.sql`** — not the PR-11 migration this
+> section originally named. Every decision above is enforced there: private bucket, the 10MB cap on
+> the bucket row (`config.toml`'s 50MiB global is only a ceiling), and the five-MIME allow-list.
 
 ## 3.3 The free-tier ceiling is a real constraint, not a footnote
 
@@ -163,7 +167,8 @@ across sessions.
 | **11 Document Library** | `documents` table on the spine, list screen, service + RLS tests | The vertical slice must include *something* reaching the screen. No permission design. |
 | **12 Categories** | Identity / Medical / Finance / Property / Education / Legal, per IA §4 | Decide: a column with a check constraint, or a table. A fixed list argues for the column. |
 | **13 Viewer** | ~~Open a document~~ → **Document detail: rename, re-file, visibility, AI consent, archive, delete.** See the amendment below. | The over-2h budget no longer applies — it existed only for `react-native-pdf`, and §5 settled on a WebView. |
-| **14 Upload** | Expo ImagePicker / DocumentPicker → Supabase Storage, **then Preview and Download** | Where §3.2's decisions come due. NFR-007 requires visible progress. Likely needs splitting. |
+| **14a Upload** | Bucket, `storage.objects` policies, path allocator, picker, upload with real progress | Where §3.2's decisions come due. **Split confirmed — see the amendment below.** |
+| **14b Preview** | Open and download an attached file; `react-native-webview` for PDFs | The other half of FR-014, landing in a detail screen that already exists. |
 | **15 Sharing** | **Un-vacated 2026-08-09 — sharing, properly.** Every document is now author-only, so this is the PR that decides how one reaches anybody else. | Restores `visibility` to the UI and either `member_id` or a `record_shares` table (matrix §10) to the resolver. Read the §8.4 amendment first. |
 
 Phase 4 (Memories) and Phase 5 (Medical) both explicitly reuse this phase's upload and CRUD
@@ -212,6 +217,26 @@ The correction, in migration `20260810090000`:
 The generalisable lesson, since Phases 4–6 reuse this table's shape: *"who is this record about"* and
 *"who may read this record"* are different questions. A column answering both is an escalation
 waiting to be noticed.
+
+### And PR-14 split, 2026-08-11 — bytes in, then bytes out
+
+**14a is bytes in**: the bucket, the `storage.objects` policies, the path allocator, the picker and
+upload with a real percentage. **14b is bytes out**: preview and download, FR-014's last two actions.
+
+Each is demoable on its own, and 14b lands in a detail screen that already exists rather than being
+invented alongside an upload flow.
+
+**Three things 14a changed that were decided elsewhere and are worth finding from here:**
+
+1. **The §9.1 storage predicate was unsafe and is corrected.** `has_family_access(segment 1)` is
+   tenant-level and role-blind; after 20260810090000 it would have let any family member fetch the
+   bytes of a document they cannot read. The policies now also check the author on segment 2. See the
+   `docs/15` §9.1 amendment.
+2. **`unique (document_id, kind, version)` was replaced.** It forced the second page of a passport to
+   claim it superseded the first. `version` still means *revision* and stays at 1; uniqueness is now
+   on the object.
+3. **NFR-007 is met with a real percentage**, via `XMLHttpRequest` rather than supabase-js, which
+   exposes no upload progress on React Native.
 
 ---
 
@@ -338,9 +363,15 @@ this.
 
 # 8. Packages Phase 3 will add
 
-None of these are installed yet: `expo-image-picker`, `expo-document-picker`, `expo-file-system`,
-and — subject to §5 — `react-native-pdf` or a WebView. Check each against **Expo SDK 54**, not
-latest; the SDK pin is deliberate and documented in the README.
+~~None of these are installed yet:~~ **Installed in PR-14a** via `npx expo install`, which resolves
+against the pinned SDK rather than latest: `expo-image-picker` ~17.0.11, `expo-document-picker`
+~14.0.8, `expo-file-system` ~19.0.23. Still pending for **14b**: `react-native-webview`, per §5's
+WebView decision.
+
+**`base64-arraybuffer` is not needed**, though Supabase's own React Native storage guide recommends
+it. SDK 54's rewritten `expo-file-system` gives `new File(uri).bytes()` returning a `Uint8Array`
+directly — the guide predates that API. Check each against **Expo SDK 54**, not latest; the SDK pin
+is deliberate and documented in the README.
 
 Run `npm ci && npm run typecheck && npm test` before pushing anything that touched dependencies.
 `npm install` and `npm ci` disagree, and CI runs the second (see the PR-3 checkpoint).
@@ -376,11 +407,22 @@ The first three changed the schema. The last two changed the stream.
   what teaches every future service whether that value is an opaque identifier or a path
   (`docs/17` §10).
 - `document_members` — the join table, documented as non-permission-bearing.
-- The `family-files` bucket and its `storage.objects` policies, **in the migration**, with a
-  matching `storage.rls.test.ts`.
-- **One `SECURITY DEFINER` function that is the only thing in the system constructing a storage
-  path.** No client ever builds one.
+- ~~The `family-files` bucket and its `storage.objects` policies, **in the migration**, with a
+  matching `storage.rls.test.ts`.~~
+- ~~**One `SECURITY DEFINER` function that is the only thing in the system constructing a storage
+  path.** No client ever builds one.~~
 - `src/services/document.ts` following the existing `XGateway` + `createSupabaseXGateway` shape.
+
+> **Corrected 2026-08-11.** The two struck items never belonged to PR-11 and were not built by it.
+> PR-11's own migration says so at the top: *"No bucket and no storage.objects policies here. Those
+> arrive in PR-14 with the upload flow that gives them a caller — this project has three times
+> shipped a capability reachable only by its tests, and an empty bucket governed by untested
+> policies would be the fourth."*
+>
+> The migration is later than this list and is the shipped reality. **PR-14a owns the bucket, the
+> storage policies, the path allocator and `storage.rls.test.ts`**, and has now built all four. This
+> is recorded rather than quietly deleted because a session reading the list would have assumed the
+> work existed and skipped it.
 
 `ai_processing` ships now rather than in Phase 9 deliberately: retrofitting consent onto existing
 rows is the backfill bug class this project has already been bitten by, and Phase 9 is far too late
