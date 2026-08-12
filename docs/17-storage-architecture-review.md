@@ -327,8 +327,11 @@ literally rather than rhetorically.
 
 It is also a better build-in-public story than a Google integration: **we made it easy to leave.**
 
-**Placement is open** — Phase 3, PR-15's vacated slot (`docs/16` §6.1), or Phase 10 alongside
-*Backup & Restore*. Recorded in `docs/14` so it cannot be lost.
+**Placement is open** — ~~PR-15's vacated slot~~ **that slot no longer exists.** PR-15 was un-vacated
+on 2026-08-09 and is now real sharing work, because `20260810090000` made every document author-only
+(`docs/15` §8.4). Export's remaining home is **Phase 10, alongside *Backup & Restore*** (PR-48),
+which is where it always fitted best — both answer "get my data out". Recorded in `docs/14` so it
+cannot be lost.
 
 ---
 
@@ -374,7 +377,7 @@ Recorded rather than resolved, so none of it is rediscovered mid-stream.
 
 | Item | Where it belongs |
 |---|---|
-| **Export placement** | Phase 3, PR-15's vacated slot, or Phase 10. Deliberately deferred |
+| **Export placement** | **Phase 10, with *Backup & Restore*.** PR-15's slot was reclaimed for sharing on 2026-08-09 |
 | **Shared vs per-domain file tables** | `document_files` ships in Phase 3. **Phase 4 must decide before `memory_files` exists** — at two tables it is a rename, at six a rewrite |
 | **Phase 9 vs Phase 11 contradiction** | Phase 9 ships bytes to a third-party OCR/LLM vendor; Phase 11 commits to E2EE the server cannot read. Nobody has written down where the line falls. Predates this review |
 | **Key management for the encrypted tier** | Phase 11. Per-family wrapping, rotation on member removal, and recovery when the key holder is the person who died |

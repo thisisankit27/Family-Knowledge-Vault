@@ -219,6 +219,16 @@ Document Sharing
 > *within* a family is already served by `visibility`, and *between* families has no designed
 > mechanism and is not a 2-hour PR. Per-record ACLs belong to Phase 10. See `docs/16` §6.1 and
 > `docs/17`. Candidates for the slot: the document detail screen, or export.
+>
+> **Un-vacated 2026-08-09, and this is now the most consequential PR in the phase.** The amendment
+> above was written when documents were family-visible by default, so within-family sharing was
+> already handled. It is not any more: migration `20260810090000` made **every document readable only
+> by its author**, after a privilege escalation was found on a device (`docs/15` §8.4). Nothing
+> reaches anybody else today, so PR-15 is where "who can see this" gets designed rather than
+> inherited.
+>
+> **Read `docs/15` §8.4's amendment before starting it.** The last attempt at sharing shipped an
+> escalation by answering "who is this about" and "who may read this" with one column.
 
 Visible Progress
 

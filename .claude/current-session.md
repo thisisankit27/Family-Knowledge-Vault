@@ -1399,11 +1399,11 @@ in Phase 9 is the backfill bug class this project has already been bitten by.
 
 | Item | Decision |
 |---|---|
-| PR-15 "Sharing" | Within-family only → **PR-15's slot is vacated** |
+| PR-15 "Sharing" | Within-family only → **PR-15's slot is vacated** *(reversed two days later — see the PR-12/13 entry below: author-only documents mean nothing is shared, so PR-15 designs sharing)* |
 | Members per document | Multiple, via `document_members` — **explicitly not permission-bearing** |
 | Archive vs soft delete | Separate columns: `archived_at` and `deleted_at` |
 | Bucket / MIME / size | Private `family-files`; images + PDF; **10MB**; created **by migration**, not `config.toml` |
-| PDF strategy | WebView. **Demo stays on Expo Go**; the dev build moves to Phase 10 |
+| PDF strategy | WebView. **Demo stays on Expo Go**; the dev build moves to Phase 10 *(the WebView half was wrong — Android cannot render PDFs. Corrected in PR-14b)* |
 | Thumbnails *(dropped from the checklist)* | Deferred — `document_files.kind` reserves the slot |
 | Filename sanitisation *(dropped from the checklist)* | Dissolved: the path segment is a uuid, never user input |
 
@@ -1430,7 +1430,7 @@ What replaced it: `npx supabase start` — the **real** Storage and RLS, locally
 
 ## Open items
 
-- **Export placement** — Phase 3, PR-15's vacated slot, or Phase 10. Deliberately deferred.
+- **Export placement** — Phase 3, PR-15's vacated slot, or Phase 10. Deliberately deferred. *(Settled later: Phase 10, once PR-15's slot was reclaimed for sharing.)*
 - **Shared vs per-domain file tables** — `document_files` ships now; **Phase 4 must decide before
   `memory_files` exists.** At two tables it is a rename, at six a rewrite.
 - **Phase 9 vs Phase 11** — one ships bytes to an OCR vendor, the other commits to E2EE the server
@@ -1726,7 +1726,7 @@ row would describe bytes that are not there — a catalogue that lies is worse t
 
 ## Deliberate gaps
 
-- **Preview and download** — 14b, with `react-native-webview`.
+- **Preview and download** — 14b. *(It turned out not to need `react-native-webview` at all.)*
 - **Orphaned bytes.** The trigger removes rows, not bytes; Phase 12 sweeps by diffing a bucket
   listing against `document_files.provider_file_id`, which stays computable however many rows go.
   Privacy is unaffected — `owns_document_object` resolves through a `documents` row that is gone.
@@ -1761,3 +1761,64 @@ suddenly cannot reach the stack, check `ip -4 addr` against `.env.local` **first
 ## Next
 
 **PR-14b** — preview and download. Then PR-15, sharing.
+
+---
+---
+
+# PR-14b Complete — Preview and download (2026-08-12)
+
+**437 CI tests, 218 RLS tests, fourteen migrations.** No migration in this PR — the policies 14a
+shipped already govern everything it does.
+
+## It corrected a documented decision before honouring it
+
+`docs/16` §5 settled on *"images plus PDF in a WebView"* to avoid a dev build. **Android's WebView
+cannot render a PDF.** iOS can; the demo device cannot. That decision was made without the platform
+fact, and following it would have shipped a blank box on stream.
+
+**The usual workaround is rejected on privacy grounds, not weighed against them.** Google's document
+viewer renders any PDF it can fetch, which means handing a family's private papers to Google — the
+same reasoning `docs/17` used to decline Google Drive.
+
+**PDFs open in the device's own reader** via the share sheet. Private, Expo Go, no dev build, and it
+uses software the user already trusts. **`react-native-webview` was never installed** — it was the
+only package §8 still listed as pending, now removed rather than deferred.
+
+## `docs/17` §10.1's outstanding requirement is finally built
+
+Every PR since the storage review deferred this: *"never store a URL — store the identifier and mint
+on demand"*, and *"signed-URL expiry must not reach the components."*
+
+`fileUrl(gateway, file)` takes the **row**, not a path, so no caller can hand it something they
+built — path construction is the database's job. The TTL is 300s and lives in one constant. Expiry
+is contained in a single `onError` handler that re-mints **once**, not a loop.
+
+Authorisation is inherited, not re-implemented: `createSignedUrl` goes through the storage SELECT
+policy, so an RLS test now proves **another member of the same family cannot mint a URL** for a file
+they cannot read. A signed URL that bypassed the policy would be a way *around* it rather than an
+expression of it.
+
+## UI decisions, and the consistency argument behind each
+
+| | |
+|---|---|
+| **Pushed route** | `documents/[documentId]/[fileId]`, matching the Family tab's `[memberId]` shape. Tab bar stays — opening a file never feels like leaving the section |
+| **Not a dark lightbox** | `theme.ts` is light-only by decision; a dark viewer would be the first screen to break it |
+| **Rows became links** | The attachment row lost its `x` and gained a chevron, exactly like a library card. PR-13's reasoning one level down: *"piling icons onto a list row is what makes an app feel like a file manager"* |
+| **Remove moved to the viewer** | Beside Share, where "Delete permanently" sits on the document screen. One more tap, one less crowded row |
+| **No download progress** | `downloadFileAsync` exposes no progress callback, and `ProgressBar`'s own comment forbids the alternative — *"a bar animated on a timer would look identical and mean nothing."* A spinner is the honest control. The upload earned its percentage because NFR-007 asks; nothing asks here |
+
+## Deliberate gaps
+
+- **In-app PDF rendering** — needs bundled `pdf.js` (~1MB, its own PR) or Phase 10's dev build. What
+  is ruled out *permanently* is sending the file to a third party to render.
+- **Zoom and pan** on images.
+- **Thumbnails** still deferred; `kind` reserves the slot.
+- **Cached downloads** are overwritten rather than reused; staleness is not worth reasoning about at
+  a 10MB cap.
+
+## Next
+
+**PR-15 — Sharing**, and Phase 3 is done. It is un-vacated (`docs/16` §4) and carries real weight:
+every document is currently author-only, so PR-15 decides how one reaches anybody else. Read the
+`docs/15` §8.4 amendment first — the last attempt at this shipped a privilege escalation.
