@@ -417,6 +417,54 @@ describeRls('document storage', () => {
     });
   });
 
+  describe('signed URLs', () => {
+    it('lets the author mint one, and it fetches', async () => {
+      const path = await attachAFile();
+
+      const { data, error } = await author.storage.from(BUCKET).createSignedUrl(path, 300);
+
+      expect(error).toBeNull();
+      expect(data!.signedUrl).toContain(path);
+
+      const response = await fetch(data!.signedUrl);
+      expect(response.status).toBe(200);
+    });
+
+    it('stops another member minting one', async () => {
+      // **The guard this feature introduces.** createSignedUrl goes through the
+      // storage SELECT policy, so a member who cannot read the object cannot
+      // mint a link to it either — otherwise the URL would be a way around the
+      // policy rather than an expression of it.
+      const path = await attachAFile();
+
+      const { data, error } = await other.storage.from(BUCKET).createSignedUrl(path, 300);
+
+      expect(error ?? data === null).toBeTruthy();
+      expect(data?.signedUrl).toBeUndefined();
+    });
+
+    it('fetches without a session, which is what signing means', async () => {
+      // Stated as a test because it is the reason the TTL is short and the
+      // reason nothing stores one: a minted URL is a bearer token for that
+      // object until it expires.
+      const path = await attachAFile();
+      const { data } = await author.storage.from(BUCKET).createSignedUrl(path, 300);
+
+      // No Authorization header — the signature is the whole credential.
+      const response = await fetch(data!.signedUrl);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('refuses a path the caller made up', async () => {
+      const { data, error } = await author.storage
+        .from(BUCKET)
+        .createSignedUrl(`${familyId}/${documentId}/never-uploaded.jpg`, 300);
+
+      expect(error ?? data === null).toBeTruthy();
+    });
+  });
+
   describe('cleanup', () => {
     it('removes the objects when the document goes', async () => {
       const path = await attachAFile();

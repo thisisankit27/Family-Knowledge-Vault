@@ -24,7 +24,11 @@ export default function DocumentsLayout() {
     >
       {/* The library draws its own title inside the scroll area. */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="[documentId]" options={{ title: 'Document' }} />
+      <Stack.Screen name="[documentId]/index" options={{ title: 'Document' }} />
+      {/* The viewer sets its own title to the file's name, the way the Family
+          tab's member screen sets a person's. A generic "File" would be worse
+          than the filename it replaced. */}
+      <Stack.Screen name="[documentId]/[fileId]" />
     </Stack>
   );
 }

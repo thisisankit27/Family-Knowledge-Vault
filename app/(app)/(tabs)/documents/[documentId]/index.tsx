@@ -6,15 +6,15 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Button } from '../../../../src/components/Button';
-import { ProgressBar } from '../../../../src/components/ProgressBar';
-import { LockedNotice } from '../../../../src/components/LockedNotice';
-import { TextField } from '../../../../src/components/TextField';
-import { formatRelativeTime } from '../../../../src/lib/relativeTime';
-import { getSupabaseEnv } from '../../../../src/lib/env';
-import { getSupabase } from '../../../../src/lib/supabase';
-import { useAuth } from '../../../../src/providers/AuthProvider';
-import { useFamily } from '../../../../src/providers/FamilyProvider';
+import { Button } from '../../../../../src/components/Button';
+import { ProgressBar } from '../../../../../src/components/ProgressBar';
+import { LockedNotice } from '../../../../../src/components/LockedNotice';
+import { TextField } from '../../../../../src/components/TextField';
+import { formatRelativeTime } from '../../../../../src/lib/relativeTime';
+import { getSupabaseEnv } from '../../../../../src/lib/env';
+import { getSupabase } from '../../../../../src/lib/supabase';
+import { useAuth } from '../../../../../src/providers/AuthProvider';
+import { useFamily } from '../../../../../src/providers/FamilyProvider';
 import {
   CATEGORY_HINTS,
   CATEGORY_LABELS,
@@ -32,19 +32,18 @@ import {
   MAX_DOCUMENT_TITLE_LENGTH,
   type DocumentCategory,
   type FamilyDocument,
-} from '../../../../src/services/document';
-import { createSupabaseMemberGateway, listMembers, type Member } from '../../../../src/services/member';
+} from '../../../../../src/services/document';
+import { createSupabaseMemberGateway, listMembers, type Member } from '../../../../../src/services/member';
 import {
   createSupabaseStorageGateway,
   formatBytes,
   listDocumentFiles,
-  removeDocumentFile,
   uploadDocumentFile,
   type DocumentFile,
   type UploadCandidate,
-} from '../../../../src/services/storage';
-import { canWriteRecords } from '../../../../src/services/role';
-import { theme } from '../../../../src/theme';
+} from '../../../../../src/services/storage';
+import { canWriteRecords } from '../../../../../src/services/role';
+import { theme } from '../../../../../src/theme';
 
 /**
  * One document, and everything that can be done to it without a file.
@@ -563,32 +562,25 @@ function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boo
     return attach(candidate);
   }
 
-  function confirmRemove(file: DocumentFile) {
-    Alert.alert(`Remove this file?`, 'The document stays; only the file goes.', [
-      { text: 'Keep it', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            const result = await removeDocumentFile(gateway(), file);
-            if (!result.ok) {
-              setError(result.message);
-              return;
-            }
-            await load();
-          })();
-        },
-      },
-    ]);
-  }
-
   if (loading) return <ActivityIndicator color={theme.colors.primary} />;
 
   return (
     <>
+      {/*
+        A row is a link, not a control strip. Removing lives on the file's own
+        screen, next to Share, the same way a document's actions live on the
+        document screen rather than on its card — PR-13's reasoning, applied one
+        level down: piling icons onto a list row is what makes an app feel like
+        a file manager.
+      */}
       {files.map((file) => (
-        <View key={file.id} style={styles.fileRow}>
+        <Pressable
+          key={file.id}
+          onPress={() => router.push(`/(app)/(tabs)/documents/${documentId}/${file.id}`)}
+          style={styles.fileRow}
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${file.originalFilename ?? 'photo'}`}
+        >
           <Ionicons
             name={file.mimeType === 'application/pdf' ? 'document-text-outline' : 'image-outline'}
             size={20}
@@ -600,16 +592,8 @@ function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boo
               {formatBytes(file.sizeBytes)} · {formatRelativeTime(file.createdAt)}
             </Text>
           </View>
-          {canEdit ? (
-            <Pressable
-              onPress={() => confirmRemove(file)}
-              accessibilityRole="button"
-              accessibilityLabel="Remove file"
-            >
-              <Ionicons name="close-outline" size={20} color={theme.colors.textMuted} />
-            </Pressable>
-          ) : null}
-        </View>
+          <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+        </Pressable>
       ))}
 
       {files.length === 0 && progress === null ? (
@@ -866,6 +850,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
+    // The row is the whole hit target now that the remove button has gone.
+    minHeight: theme.touchTarget,
   },
   fileText: {
     flex: 1,

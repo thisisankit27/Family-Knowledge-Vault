@@ -2,12 +2,24 @@
 
 **Project:** Family Knowledge Vault
 
-**Version:** 1.1
+**Version:** 1.2
 
-**Status:** Written 2026-08-06 at the close of Phase 2. **Amended 2026-08-07: every open decision in
-§9 is now settled** — see `docs/17-storage-architecture-review.md`. The original problem statements
-are kept in place, each followed by its dated resolution, so the reasoning survives alongside the
-answer.
+**Status:** Written 2026-08-06 at the close of Phase 2, and amended four times as the phase taught
+things the brief could not have known. **PR-11 through PR-14b are shipped; PR-15 is the last.**
+
+Original problem statements are kept in place with their dated resolutions appended, so the reasoning
+survives alongside the answer — and where a resolution was later *reversed*, both are shown. Two were:
+
+| Amended | What changed, and why it matters |
+|---|---|
+| 08-07 | Every open §9 decision settled — see `docs/17` |
+| 08-09 | **Every document became author-only** after a privilege escalation found on a device (`docs/15` §8.4). This reversed §6.1: PR-15 had been vacated because "within a family is already served by `visibility`", which stopped being true |
+| 08-11 | The `has_family_access` storage predicate in §3.1 was **unsafe** under the new model and gained an author conjunct (`docs/15` §9.1) |
+| 08-12 | §5's "PDF in a WebView" **could never have worked** — Android's WebView cannot render PDFs |
+
+**The pattern worth carrying into Phase 4:** three of those four came from running the app on a real
+device, not from the 655 automated tests. Twice the tests were *asserting the wrong behaviour was
+correct*.
 
 ---
 
@@ -168,7 +180,7 @@ across sessions.
 | **12 Categories** | Identity / Medical / Finance / Property / Education / Legal, per IA §4 | Decide: a column with a check constraint, or a table. A fixed list argues for the column. |
 | **13 Viewer** | ~~Open a document~~ → **Document detail: rename, re-file, visibility, AI consent, archive, delete.** See the amendment below. | The over-2h budget no longer applies — it existed only for `react-native-pdf`, and §5 settled on a WebView. |
 | **14a Upload** | Bucket, `storage.objects` policies, path allocator, picker, upload with real progress | Where §3.2's decisions come due. **Split confirmed — see the amendment below.** |
-| **14b Preview** | Open and download an attached file; `react-native-webview` for PDFs | The other half of FR-014, landing in a detail screen that already exists. |
+| **14b Preview** | Open an attached file; images preview in-app, PDFs open in the device's own reader; share sheet for "Download" | FR-014's last two actions. **No WebView** — see §5's correction. |
 | **15 Sharing** | **Un-vacated 2026-08-09 — sharing, properly.** Every document is now author-only, so this is the PR that decides how one reaches anybody else. | Restores `visibility` to the UI and either `member_id` or a `record_shares` table (matrix §10) to the resolver. Read the §8.4 amendment first. |
 
 Phase 4 (Memories) and Phase 5 (Medical) both explicitly reuse this phase's upload and CRUD
@@ -265,6 +277,30 @@ too slow.
 linking is needed for Emergency Mode grant redemption. One migration, one phase, one decision —
 rather than two half-reasons in Phase 3.
 
+### Corrected 2026-08-12: the WebView never could have worked
+
+**Android's WebView cannot render a PDF.** iOS has a built-in viewer; Android does not, so a PDF
+handed to a WebView downloads instead of displaying. The decision above chose a WebView to avoid a
+dev build and was made without that fact — on the one platform this project demos on, it would have
+shipped a blank box.
+
+**The usual workaround is rejected on privacy grounds, not weighed against them.** Google's document
+viewer (`docs.google.com/gview?url=…`) renders any PDF it can fetch, which means handing it a URL to
+a family's private papers. For a product whose thesis is that a family's information stays theirs,
+that is disqualifying — the same reasoning `docs/17` used to decline Google Drive.
+
+**PDFs open in the device's own reader**, via the share sheet: private, works in Expo Go on both
+platforms, needs no dev build, and uses software the user already trusts. Images still preview
+in-app.
+
+Two consequences worth carrying forward:
+
+- **`react-native-webview` is not needed at all.** It was the only package §8 still listed as
+  pending, and it is now removed rather than deferred.
+- **In-app PDF rendering is still possible later**, by bundling `pdf.js` (~1MB of assets, its own PR)
+  or with Phase 10's dev build. What is ruled out permanently is sending the file to a third party
+  to be rendered.
+
 ---
 
 # 6. Contradictions in the existing docs — flag, do not silently resolve
@@ -287,6 +323,12 @@ of Phase 3.
 
 **PR-15's slot is therefore vacant.** Candidates: the document detail/edit screen, or the export
 feature (`docs/17` §11). Recorded as open rather than quietly filled.
+
+> **Superseded 2026-08-09 — the premise stopped being true.** This decision rested on *"within a
+> family is already served by `visibility`"*. It is not: migration `20260810090000` made every
+> document readable **only by its author**, so nothing is shared with anybody by any mechanism.
+> PR-15 is un-vacated and is now where sharing gets designed. The detail screen went to PR-13
+> instead, and export is re-homed (see §4's amendment).
 
 ## 6.2 A document may relate to *multiple* members
 
@@ -365,8 +407,11 @@ this.
 
 ~~None of these are installed yet:~~ **Installed in PR-14a** via `npx expo install`, which resolves
 against the pinned SDK rather than latest: `expo-image-picker` ~17.0.11, `expo-document-picker`
-~14.0.8, `expo-file-system` ~19.0.23. Still pending for **14b**: `react-native-webview`, per §5's
-WebView decision.
+~14.0.8, `expo-file-system` ~19.0.23. **14b added `expo-sharing` ~14.0.8 and nothing else.**
+
+~~Still pending for **14b**: `react-native-webview`, per §5's WebView decision.~~ **Not needed** —
+§5's correction means PDFs open in the device's own reader rather than in a WebView that could not
+have rendered them on Android.
 
 **`base64-arraybuffer` is not needed**, though Supabase's own React Native storage guide recommends
 it. SDK 54's rewritten `expo-file-system` gives `new File(uri).bytes()` returning a `Uint8Array`
@@ -382,13 +427,16 @@ Run `npm ci && npm run typecheck && npm test` before pushing anything that touch
 
 **All settled 2026-08-06, during the storage architecture review (`docs/17`).**
 
-- [x] Decide what PR-15 "Sharing" means (§6.1) → **within-family only; PR-15's slot is vacated.**
+- [x] Decide what PR-15 "Sharing" means (§6.1) → ~~within-family only; PR-15's slot is vacated~~
+      → **reopened 2026-08-09. Every document is author-only, so PR-15 designs sharing.** See §6.1.
 - [x] Decide single vs multiple members per document (§6.2) → **multiple, via a
       `document_members` join table that is explicitly *not* permission-bearing.**
 - [x] Decide archive vs soft delete (§6.3) → **separate columns: `archived_at` and `deleted_at`.**
 - [x] Decide the bucket name, MIME allow-list and size cap (§3.2) → **private `family-files`;
       images + PDF; 10MB.** Created by migration, not `config.toml`.
-- [x] Decide the PDF strategy, and therefore whether the demo stays on Expo Go (§5) → **WebView.
+- [x] Decide the PDF strategy, and therefore whether the demo stays on Expo Go (§5) → ~~WebView~~
+      **corrected 2026-08-12: Android's WebView cannot render PDFs, so they open in the device's own
+      reader. The demo still stays on Expo Go.** See §5. Originally: **WebView.
       The demo stays on Expo Go; the dev build moves to Phase 10.**
 
 **Plus the two items §3.2 listed and this checklist originally dropped:**

@@ -169,6 +169,20 @@ Documents shall support:
 - Archive
 - Delete
 
+> **How this reads on a phone, recorded 2026-08-12 after PR-14b built it.**
+>
+> **"Download" is a desktop-shaped word.** A phone has no folder the user thinks of as theirs, so the
+> honest equivalent is the system share sheet — which covers every reason somebody wants a document
+> out: saving to Files, sending it to a doctor, printing, or opening it in another app.
+>
+> **"Preview" is not uniform across file types.** Images render in-app. PDFs do not, because
+> Android's WebView cannot render them and the usual workaround would send private documents to a
+> third party to be rendered — see `docs/16` §5. A PDF therefore opens in the reader the user already
+> has, which is also why the share sheet is its *primary* action rather than a secondary one.
+>
+> The six actions are all reachable. Two of them mean something slightly different on a phone than
+> the word suggests, and that is recorded here rather than left for somebody to discover as a gap.
+
 ---
 
 ## FR-015
