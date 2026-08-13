@@ -2127,3 +2127,63 @@ with the network fully up.
 
 **PR-16 — the landing page, and Phase 3 closes.** It is stale by seven PRs and lists no Documents
 capability at all. `CLAUDE.md` specifies four edits and the rules for each.
+
+---
+---
+
+# PR-16 Complete — The landing page, and Phase 3 closes (2026-08-13)
+
+**No app code.** `CLAUDE.md` makes this the last act of every phase, and it had been skipped for
+seven PRs — the page said 18 merged and 463 tests while the repo was at 28 and 712, and it listed no
+Documents capability at all.
+
+## The four edits
+
+1. **Stats** — 18 → **28** merged, 463 → **712** tests (472 CI + 240 RLS), 12 phases unchanged. The
+   28 counts this page's own pull request, which is correct: it is merged by the time anyone reads the
+   number, and the stats sit directly above a link to the merged list.
+2. **"What works today"** — nine Documents lines added, each one a thing a stranger could actually do.
+   Filing in one step, six shelves and the filter, attachments up to 10MB, in-app photo preview, PDFs
+   in the phone's own reader, keeping a document private or sharing it with the family, rename /
+   re-file / reassign, archive / restore / delete.
+3. **"What does not work yet"** — nothing removed except the line that had become false. Seven new
+   entries; the honest one worth naming is **"the 'let AI read this' switch does nothing yet"**, which
+   is a visible control with no machine behind it until Phase 9. Also: sharing is all-or-nothing, no
+   cross-family sharing, no search, PDFs open elsewhere and *why* Google's viewer was refused,
+   deletion is permanent, and Guests see nothing at all.
+4. **Phase list** — 3 to `shipped`, 4 to `building`, and the `.status` line to *"Phase 4, Family
+   Memories"*.
+
+## Verification actually performed
+
+Rendering was checked rather than asserted, at **1280px and 390px in both colour schemes** — four
+headless Chrome captures, inspected. Phases 1–3 read SHIPPED, 4 reads BUILDING, the stats reflow to
+2+1 on mobile, both cards stack, and there is no horizontal overflow.
+
+**How to drive the theme, since `--force-dark-mode` does not do it.** The page resolves its palette
+from `localStorage` → `data-theme` → `prefers-color-scheme`, and headless Chrome ignores the dark-mode
+flag for the media query. Setting `data-theme` on `<html>` in a scratch copy exercises the same CSS
+paths the toggle uses, so it tests the real thing. The scratch copy also hides the other sections, so
+a 2600px window contains the whole of `#progress`.
+
+All three external links return 200.
+
+## The asymmetry is deliberate
+
+The wins column is visibly shorter than the gaps column, leaving whitespace. That was left alone.
+`CLAUDE.md` says the gaps list is the strongest trust signal on the page and does not get quietly
+shortened, and padding the wins list to balance a layout would be the exact failure the section
+exists to prevent. Anyone can publish wins.
+
+## Phase 3 is done
+
+Eleven through 16: library, categories, detail, upload, preview, sharing, filing flow, landing page.
+**Phase 4 — Family Memories — is next**, and `docs/17` §13 flags the decision it must make first:
+**shared vs per-domain file tables.** `document_files` ships alone today; at two tables it is a
+rename, at six a rewrite. Settle it before `memory_files` exists.
+
+## An operational note, twice
+
+`pkill -f "expo start"` and `pkill -f "http.server 809"` both **matched the shell command running
+them** and killed the session instead of the target. Kill by pid from `pgrep` with a bracketed
+pattern (`http[.]server`), or the pattern finds itself.

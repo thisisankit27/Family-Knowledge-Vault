@@ -204,7 +204,7 @@
       -->
       <section class="section wrap" id="progress">
         <p class="eyebrow">Progress</p>
-        <h2>Phases 1 and 2 have shipped.</h2>
+        <h2>Phases 1, 2 and 3 have shipped.</h2>
         <p class="prose">
           This is not a landing page for something that might get built. Every
           claim below corresponds to merged code you can read right now — and
@@ -215,14 +215,18 @@
           These numbers must match what a reader finds when they check.
           "Pull requests" is the count in the linked merged list; "tests" is
           `npm test` plus the row-level-security suite.
+
+          Updated at the close of Phase 3: 28 merged (this page's own pull
+          request included, since it is merged by the time anybody reads this),
+          712 tests = 472 CI + 240 row-level-security.
         -->
         <ul class="stats">
           <li>
-            <strong>18</strong>
+            <strong>28</strong>
             <span>pull requests merged</span>
           </li>
           <li>
-            <strong>463</strong>
+            <strong>712</strong>
             <span>automated tests</span>
           </li>
           <li>
@@ -246,6 +250,26 @@
               <li>Remove someone's access, leave a family, or hand it over</li>
               <li>Delete a family, after typing its name to confirm</li>
               <li>See what has happened in the family, and who did it</li>
+              <li>
+                File a document — its name, its shelf, whose it is, who can see
+                it, whether AI may read it, and its scans — in one step
+              </li>
+              <li>
+                Sort papers onto six shelves — identity, medical, finance,
+                property, education, legal — and filter by them
+              </li>
+              <li>
+                Attach photographs or PDFs, several to one document, up to 10 MB
+                each
+              </li>
+              <li>Look at an attached photograph without leaving the app</li>
+              <li>Open a PDF in the reader already on your phone</li>
+              <li>
+                Keep a document to yourself, or share it with everyone in the
+                family — and change your mind either way
+              </li>
+              <li>Rename a document, move it to another shelf, or reassign it</li>
+              <li>Archive a document, bring it back, or delete it for good</li>
             </ul>
           </div>
 
@@ -261,9 +285,46 @@
                 proves you own the address you signed up with.
               </li>
               <li>
-                <strong>Documents, medical records, memories and recipes are
-                empty.</strong> The sections exist; the features are Phases 3
-                to 6.
+                <strong>Medical records, memories and recipes are empty.</strong>
+                The sections exist; the features are Phases 4 to 6. Documents
+                work — they were Phase 3.
+              </li>
+              <li>
+                <strong>The "let AI read this" switch does nothing yet.</strong>
+                It records your answer and nothing reads it. Asking before there
+                is anything to consent to is deliberate — the alternative is
+                asking a family to agree retroactively — but it is a switch with
+                no machine behind it until Phase 9.
+              </li>
+              <li>
+                <strong>You cannot share a document with one person.</strong>
+                Sharing is yourself, or the whole family. "Just Mum and Dad" is
+                Phase 10.
+              </li>
+              <li>
+                <strong>Nothing is shared between families.</strong> A document
+                cannot reach your parents' vault from yours. No mechanism for it
+                has been designed.
+              </li>
+              <li>
+                <strong>You cannot search.</strong> Six shelves and a filter are
+                the whole of finding something. Search is Phase 8, and reading
+                the text inside a scan is Phase 9.
+              </li>
+              <li>
+                <strong>PDFs open in another app.</strong> Android's built-in
+                web view cannot draw one, and the usual workaround sends the file
+                to Google to be rendered — which is the opposite of the promise
+                this project makes. So your own reader opens it instead.
+              </li>
+              <li>
+                <strong>Deleting a document is permanent.</strong> There is no
+                trash, which is why it is offered only after archiving.
+              </li>
+              <li>
+                <strong>Guests see no documents at all.</strong> Not a filtered
+                list — nothing. The role exists for people who should see the
+                family without its papers.
               </li>
               <li>
                 <strong>You cannot remove a person from the family.</strong>
@@ -303,12 +364,16 @@
             <span class="phase-name">2 · Meet the Family</span>
             <span class="phase-note">Profiles, relationships, roles</span>
           </li>
-          <li class="phase building">
-            <span class="phase-status">Building</span>
+          <li class="phase shipped">
+            <span class="phase-status">Shipped</span>
             <span class="phase-name">3 · Preserve What Matters</span>
             <span class="phase-note">Documents</span>
           </li>
-          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">4 · Family Memories</span><span class="phase-note">Photos, video, voice</span></li>
+          <li class="phase building">
+            <span class="phase-status">Building</span>
+            <span class="phase-name">4 · Family Memories</span>
+            <span class="phase-note">Photos, video, voice</span>
+          </li>
           <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">5 · Family Health</span><span class="phase-note">Medical records</span></li>
           <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">6 · Home &amp; Living</span><span class="phase-note">Recipes, inventory</span></li>
           <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">7 · Family Timeline</span><span class="phase-note">Events, reminders</span></li>
@@ -341,7 +406,7 @@
           </p>
           <p class="status">
             <span class="dot" aria-hidden="true"></span>
-            In active development — Phase 3, Preserve What Matters
+            In active development — Phase 4, Family Memories
           </p>
           <div class="actions">
             <a class="btn btn-primary" href="https://www.youtube.com/@vibethroughcode">
