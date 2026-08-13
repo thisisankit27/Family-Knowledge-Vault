@@ -1,7 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as DocumentPicker from 'expo-document-picker';
 import { File as DeviceFile } from 'expo-file-system';
-import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -10,7 +8,13 @@ import { Button } from '../../../../../src/components/Button';
 import { ProgressBar } from '../../../../../src/components/ProgressBar';
 import { LockedNotice } from '../../../../../src/components/LockedNotice';
 import { TextField } from '../../../../../src/components/TextField';
-import { VisibilityPicker } from '../../../../../src/components/VisibilityPicker';
+import {
+  AiConsentField,
+  CategoryField,
+  SubjectField,
+  VisibilityField,
+} from '../../../../../src/components/DocumentFields';
+import { FileSourcePicker } from '../../../../../src/components/FileSourcePicker';
 import { formatRelativeTime } from '../../../../../src/lib/relativeTime';
 import { getSupabaseEnv } from '../../../../../src/lib/env';
 import { getSupabase } from '../../../../../src/lib/supabase';
@@ -18,9 +22,7 @@ import { useAuth } from '../../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../../src/providers/FamilyProvider';
 import {
   AI_PROCESSING_LABELS,
-  CATEGORY_HINTS,
   CATEGORY_LABELS,
-  DOCUMENT_CATEGORIES,
   createSupabaseDocumentGateway,
   deleteDocument,
   describeDocumentAuthor,
@@ -34,9 +36,13 @@ import {
   setDocumentVisibility,
   MAX_DOCUMENT_TITLE_LENGTH,
   VISIBILITY_LABELS,
-  type DocumentCategory,
   type FamilyDocument,
 } from '../../../../../src/services/document';
+import {
+  describeAttachmentFailures,
+  type FailedAttachment,
+  type FilingProgress,
+} from '../../../../../src/services/filing';
 import { createSupabaseMemberGateway, listMembers, type Member } from '../../../../../src/services/member';
 import {
   createSupabaseStorageGateway,
@@ -71,12 +77,23 @@ import { theme } from '../../../../../src/theme';
  * safely a question about your *role*. It is not any more — see `canEdit` below.
  */
 export default function DocumentDetailScreen() {
-  const { documentId } = useLocalSearchParams<{ documentId: string }>();
+  const { documentId, notice } = useLocalSearchParams<{
+    documentId: string;
+    /** Set by the filing form when a document was created but a file was not. */
+    notice?: string;
+  }>();
   const { family, role } = useFamily();
   const { session } = useAuth();
   const familyId = family?.id ?? null;
 
   const [document, setDocument] = useState<FamilyDocument | null>(null);
+  /*
+    Seeded from the route param and dismissible, rather than read straight from
+    it. A param survives every re-render of this screen, so a banner driven
+    directly by one could not be got rid of without navigating away — and the
+    thing it is telling you to do is on this screen.
+  */
+  const [filingNotice, setFilingNotice] = useState<string | null>(notice ?? null);
   const [people, setPeople] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -152,11 +169,55 @@ export default function DocumentDetailScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
+      {/*
+        What the filing form could not finish, said in the app's own voice and
+        beside the control that fixes it. It replaced an `Alert.alert`, which drew
+        Android's dialog over a screen this app styles deliberately, and offered a
+        single button on something that was not a question.
+      */}
+      {filingNotice ? (
+        <Pressable
+          onPress={() => setFilingNotice(null)}
+          style={styles.notice}
+          accessibilityRole="button"
+          accessibilityLabel={`${filingNotice}. Tap to dismiss.`}
+        >
+          <Ionicons name="alert-circle-outline" size={18} color={theme.colors.warning} />
+          <Text style={styles.noticeText}>{filingNotice}</Text>
+          <Ionicons name="close-outline" size={18} color={theme.colors.textMuted} />
+        </Pressable>
+      ) : null}
+
       <Title document={document} canEdit={canEdit} onSaved={load} />
 
+      {/*
+        The same four components the filing form renders, in the same order.
+
+        **They used to be four different components on two screens**, which is
+        how the filing form ended up without AI consent and this one without
+        visibility. One owner per field means the two cannot describe the same
+        setting differently again — see `src/components/DocumentFields.tsx`.
+
+        What the two screens still own separately is *saving*, and that difference
+        is real rather than leftover: a document that does not exist yet cannot be
+        written to a field at a time, and one that does should not need a Save
+        button to move it between shelves. So these write immediately, and the
+        filing form holds its answers until "File it".
+      */}
       <Field label="Belongs to">
         {canEdit ? (
-          <SubjectPicker document={document} people={people} onSaved={load} />
+          <SubjectField
+            value={document.memberId}
+            people={people}
+            onChange={(next) =>
+              void save(
+                () =>
+                  setDocumentMember(createSupabaseDocumentGateway(getSupabase()), document.id, next),
+                load,
+                setError,
+              )
+            }
+          />
         ) : (
           <Text style={styles.value}>
             {describeDocumentSubject(document, new Map(people.map((p) => [p.id, p.displayName])))}
@@ -166,23 +227,37 @@ export default function DocumentDetailScreen() {
 
       <Field label="Filed under">
         {canEdit ? (
-          <CategoryPicker document={document} onSaved={load} />
+          <CategoryField
+            value={document.category}
+            // Not `clearable`: a filed document always has a shelf. The filing
+            // form allows clearing because nothing has been filed yet there.
+            onChange={(next) =>
+              next &&
+              void save(
+                () =>
+                  setDocumentCategory(
+                    createSupabaseDocumentGateway(getSupabase()),
+                    document.id,
+                    next,
+                  ),
+                load,
+                setError,
+              )
+            }
+          />
         ) : (
           <Text style={styles.value}>{CATEGORY_LABELS[document.category]}</Text>
         )}
       </Field>
 
       {/*
-        Directly under "Belongs to" and "Filed under", and directly above the
-        consent toggle, because all four are the same kind of thing: what this
-        document *is* and who it is for. Sitting it next to "Belongs to" is also
-        the clearest possible statement that they are different questions — the
-        one above is a label, this one is the access control, and the hint under
-        each says so.
+        Directly under "Belongs to", which is the clearest possible statement
+        that they are different questions — the one above is a label, this one is
+        the access control, and the hint under each says so.
       */}
       <Field label="Who can see it">
         {canEdit ? (
-          <VisibilityPicker
+          <VisibilityField
             value={document.visibility}
             onChange={(next) =>
               void save(
@@ -200,68 +275,37 @@ export default function DocumentDetailScreen() {
         ) : (
           /*
             Shown read-only rather than hidden. Somebody reading a document that
-            was shared with them is entitled to know it was shared — and the
-            alternative, a field that silently disappears for non-authors, would
-            make the library feel as though it were hiding something when the
-            truth is the opposite.
+            was shared with them is entitled to know it was shared — and a field
+            that silently disappeared for non-authors would make the library feel
+            as though it were hiding something when the truth is the opposite.
           */
           <Text style={styles.value}>{VISIBILITY_LABELS[document.visibility]}</Text>
         )}
       </Field>
 
+      {/*
+        No ternary here, unlike the three above: the component itself knows the
+        two presentations, because "asked" and "told" are two renderings of one
+        field rather than two fields. That is also what stopped it rendering a
+        disabled checkbox to readers.
+      */}
       <Field label="AI">
-        {canEdit ? (
-          <Toggle
-            on={document.aiProcessing === 'allowed'}
-            label="Let AI read this"
-            // Deliberately not "AI cannot see this". The server can read the
-            // bytes; this is a promise kept by code. The control that would be a
-            // guarantee is Phase 11's encryption, and it is a different thing.
-            hint="Used later to search and organise. Nothing reads it yet."
-            onToggle={(next) =>
-              void save(
-                () =>
-                  setDocumentAiProcessing(
-                    createSupabaseDocumentGateway(getSupabase()),
-                    document.id,
-                    next ? 'allowed' : 'denied',
-                  ),
-                load,
-                setError,
-              )
-            }
-          />
-        ) : (
-          /*
-            **A reader gets the decision, not the control.**
-
-            This field used to render the `Toggle` with `disabled={!canEdit}` for
-            everybody, which was unreachable code written when only the author
-            could open this screen. Sharing made it reachable and it was the only
-            field on the screen presenting itself that way — the other four all
-            fall back to a statement.
-
-            A disabled checkbox is worse than either option it sits between. It
-            asks a question, shows an answer, and then refuses the interaction it
-            just invited; a reader cannot tell whether it is broken, still
-            loading, or simply not theirs. The author's decision is a *fact about
-            the document*, and facts are sentences.
-
-            Same class of defect as the ten `canWriteRecords(role)` call sites
-            this PR corrected: a branch that was dead while every reader was also
-            the author, and wrong the moment that stopped being true. Worth
-            re-checking whenever a phase makes a new kind of reader possible.
-          */
-          <>
-            <Text style={styles.value}>{AI_PROCESSING_LABELS[document.aiProcessing]}</Text>
-            <Text style={styles.hint}>
-              {/* Whose choice it was matters here — it is not the reader's, and
-                  saying so is what stops the line reading like a setting they
-                  have failed to find. */}
-              Chosen by whoever filed it. Nothing reads it yet.
-            </Text>
-          </>
-        )}
+        <AiConsentField
+          value={document.aiProcessing}
+          readOnly={!canEdit}
+          onChange={(next) =>
+            void save(
+              () =>
+                setDocumentAiProcessing(
+                  createSupabaseDocumentGateway(getSupabase()),
+                  document.id,
+                  next,
+                ),
+              load,
+              setError,
+            )
+          }
+        />
       </Field>
 
       <Field label="Filed by">
@@ -439,131 +483,6 @@ function Title({
 }
 
 /**
- * Whose document this is.
- *
- * "The whole family" is offered first and is a real answer, not an escape
- * hatch: a deed or a utility connection belongs to no one person, and forcing
- * it onto somebody would be worse than leaving it unattributed.
- */
-function SubjectPicker({
-  document,
-  people,
-  onSaved,
-}: {
-  document: FamilyDocument;
-  people: Member[];
-  onSaved: () => Promise<void>;
-}) {
-  const [error, setError] = useState<string | null>(null);
-
-  async function choose(memberId: string | null) {
-    if (memberId === document.memberId) return;
-    const result = await setDocumentMember(
-      createSupabaseDocumentGateway(getSupabase()),
-      document.id,
-      memberId,
-    );
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    setError(null);
-    await onSaved();
-  }
-
-  return (
-    <>
-      <View style={styles.picker}>
-        <Pressable
-          onPress={() => void choose(null)}
-          style={[styles.chip, document.memberId === null ? styles.chipActive : null]}
-          accessibilityRole="button"
-          accessibilityState={{ selected: document.memberId === null }}
-        >
-          <Text
-            style={[
-              styles.chipText,
-              document.memberId === null ? styles.chipTextActive : null,
-            ]}
-          >
-            The whole family
-          </Text>
-        </Pressable>
-
-        {people.map((person) => {
-          const active = person.id === document.memberId;
-          return (
-            <Pressable
-              key={person.id}
-              onPress={() => void choose(person.id)}
-              style={[styles.chip, active ? styles.chipActive : null]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-            >
-              <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>
-                {person.displayName}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {/*
-        This sentence is the fix for the confusion that caused the bug. Until
-        20260810090000 this field granted read *and* write to whoever it named;
-        saying plainly that it no longer does is cheaper than letting the next
-        person rediscover it the way this one was discovered.
-      */}
-      <Text style={styles.hint}>
-        Just a label. It does not change who can open this — only you can.
-      </Text>
-
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-    </>
-  );
-}
-
-/**
- * Turns whichever picker the user chose into one shape the service understands.
- *
- * **Both pickers report `mimeType` and size as optional**, which is easy to miss
- * and awkward to discover on a device — an Android gallery will hand back a HEIC
- * with no MIME type at all. The size comes from the file itself rather than the
- * picker's guess, since it is the number the 10MB check depends on.
- *
- * A missing MIME type is refused rather than guessed. Inferring it from the
- * filename would put user input back into a decision the path contract works
- * hard to keep it out of.
- */
-function toCandidate(asset: {
-  uri: string;
-  mimeType?: string | null;
-  name?: string | null;
-}): UploadCandidate | { error: string } {
-  if (!asset.mimeType) {
-    return { error: 'That file did not say what kind it is. Try a photo or a PDF.' };
-  }
-
-  let sizeBytes: number | null = null;
-  try {
-    sizeBytes = new DeviceFile(asset.uri).size;
-  } catch {
-    sizeBytes = null;
-  }
-
-  if (sizeBytes === null || sizeBytes <= 0) {
-    return { error: 'That file could not be read from your device.' };
-  }
-
-  return {
-    uri: asset.uri,
-    mimeType: asset.mimeType,
-    sizeBytes,
-    originalFilename: asset.name ?? null,
-  };
-}
-
-/**
  * The files attached to a document, and the way to add one.
  *
  * A document can hold several — a passport is one document with two pages, and
@@ -578,8 +497,7 @@ function toCandidate(asset: {
 function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boolean }) {
   const [files, setFiles] = useState<DocumentFile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<number | null>(null);
-  const [choosing, setChoosing] = useState(false);
+  const [progress, setProgress] = useState<FilingProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const gateway = () => createSupabaseStorageGateway(getSupabase(), { url: getSupabaseEnv().url });
@@ -601,66 +519,72 @@ function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boo
     }, [load]),
   );
 
-  async function attach(candidate: UploadCandidate) {
+  /**
+   * Upload a batch, one after another.
+   *
+   * **This screen was single-select for one release and it was the wrong call.**
+   * The reason given was progress reporting — several concurrent uploads behind
+   * one bar is a number nobody can act on — but that argues for uploading
+   * sequentially, which this does, not for refusing the batch. And `filing.ts`
+   * had already solved the reporting: an index and a total, so "2 of 3" reads as
+   * three uploads rather than as a bar restarting.
+   *
+   * The deciding argument is consistency. Attaching a file is one action, and
+   * having it behave differently depending on which screen you are standing on is
+   * the same class of drift this PR exists to remove.
+   *
+   * Sequential rather than parallel, for the reason `filing.ts` gives: the free
+   * tier does not reward hammering storage with concurrent uploads from a phone.
+   * A failure stops the batch here — unlike filing, there is no record to protect
+   * and the files already attached are already visible, so continuing past an
+   * error would bury it under the ones that followed.
+   */
+  async function attachAll(candidates: UploadCandidate[]) {
     setError(null);
-    setProgress(0);
+    const failed: FailedAttachment[] = [];
+    let attached = 0;
+
     try {
-      const result = await uploadDocumentFile(
-        gateway(),
-        documentId,
-        candidate,
-        async (uri) => new DeviceFile(uri).bytes(),
-        setProgress,
-      );
-      if (!result.ok) {
-        setError(result.message);
-        return;
+      for (const [position, candidate] of candidates.entries()) {
+        const result = await uploadDocumentFile(
+          gateway(),
+          documentId,
+          candidate,
+          async (uri) => new DeviceFile(uri).bytes(),
+          (fraction) =>
+            setProgress({ index: position + 1, total: candidates.length, fraction }),
+        );
+
+        if (result.ok) attached += 1;
+        else failed.push({ originalFilename: candidate.originalFilename, message: result.message });
       }
-      await load();
     } finally {
+      /*
+        **Always reload, including after a failure — this is the bug this block
+        was rewritten to fix.**
+
+        It used to `return` from inside the loop the moment an upload failed,
+        which skipped the reload. Turning airplane mode on mid-batch therefore
+        left the files that *had* gone up invisible: they existed in storage and
+        in `document_files`, and the screen showed neither. Reported as failing
+        silently, which is exactly what it looked like.
+
+        The list has to describe what is actually there, and it is least
+        trustworthy at precisely the moment something went wrong.
+      */
       setProgress(null);
-    }
-  }
-
-  async function pickFrom(source: 'camera' | 'library' | 'files') {
-    if (source === 'files') {
-      const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
-      if (picked.canceled || !picked.assets[0]) return;
-      const candidate = toCandidate(picked.assets[0]);
-      if ('error' in candidate) return setError(candidate.error);
-      return attach(candidate);
+      await load();
     }
 
-    // Permission is requested at the moment it is needed rather than on mount:
-    // a prompt that appears before the user has asked for anything reads as the
-    // app taking, not the user giving.
-    const permission =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setError(
-        source === 'camera'
-          ? 'Camera access is off. Turn it on in Settings to photograph a document.'
-          : 'Photo access is off. Turn it on in Settings to choose a photo.',
-      );
-      return;
-    }
-
-    const picked =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'] })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'] });
-
-    if (picked.canceled || !picked.assets[0]) return;
-    const asset = picked.assets[0];
-    const candidate = toCandidate({
-      uri: asset.uri,
-      mimeType: asset.mimeType,
-      name: asset.fileName,
-    });
-    if ('error' in candidate) return setError(candidate.error);
-    return attach(candidate);
+    /*
+      Collect and continue, rather than stopping at the first failure — the same
+      semantics `filing.ts` uses, and now for the same reason. One unreadable
+      photo out of three should not cost the other two, and having this screen
+      and the filing form disagree about what "attach some files" means is the
+      drift this PR exists to remove. The message is built by the same function
+      too, minus the sentence about where to retry: you are already there.
+    */
+    setError(describeAttachmentFailures({ attached, failed }));
   }
 
   if (loading) return <ActivityIndicator color={theme.colors.primary} />;
@@ -702,111 +626,34 @@ function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boo
       ) : null}
 
       {/*
-        An inline chooser rather than Alert.alert, and not for taste: **Android's
-        dialog takes at most three buttons.** Four — camera, library, files,
-        cancel — silently dropped the cancel, leaving no way out of the sheet
-        except the hardware back button. Found on a device.
+        The chooser moved to `FileSourcePicker` when filing gained attachments:
+        the same three sources are needed before a document exists, where there
+        is nothing to upload to yet. It reports a candidate; who uploads it, and
+        when, is the caller's business.
 
-        Inline also means the three sources are visible before committing to
-        anything, which is the more discoverable arrangement anyway.
+        It still carries PR-14a's device finding — an inline list rather than
+        `Alert.alert`, because Android's dialog takes at most three buttons and
+        silently dropped the cancel.
       */}
       {progress !== null ? (
-        <ProgressBar fraction={progress} label="Uploading" />
-      ) : !canEdit ? null : choosing ? (
-        <View style={styles.sourceList}>
-          {(
-            [
-              ['camera', 'camera-outline', 'Take a photo'],
-              ['library', 'images-outline', 'Choose a photo'],
-              ['files', 'document-outline', 'Choose a file'],
-            ] as const
-          ).map(([source, icon, label]) => (
-            <Pressable
-              key={source}
-              onPress={() => {
-                setChoosing(false);
-                void pickFrom(source);
-              }}
-              style={styles.addFile}
-              accessibilityRole="button"
-            >
-              <Ionicons name={icon} size={18} color={theme.colors.primary} />
-              <Text style={styles.addFileText}>{label}</Text>
-            </Pressable>
-          ))}
-          <Pressable
-            onPress={() => setChoosing(false)}
-            style={styles.addFile}
-            accessibilityRole="button"
-          >
-            <Ionicons name="close-outline" size={18} color={theme.colors.textMuted} />
-            <Text style={styles.cancelText}>Cancel</Text>
-          </Pressable>
-        </View>
+        <ProgressBar
+          fraction={progress.fraction}
+          label={
+            progress.total > 1
+              ? `Uploading ${progress.index} of ${progress.total}`
+              : 'Uploading'
+          }
+        />
       ) : (
-        <Pressable
-          onPress={() => {
-            setError(null);
-            setChoosing(true);
-          }}
-          style={styles.addFile}
-          accessibilityRole="button"
-        >
-          <Ionicons name="add-circle-outline" size={18} color={theme.colors.primary} />
-          <Text style={styles.addFileText}>Add a file</Text>
-        </Pressable>
+        <FileSourcePicker
+          label={files.length === 0 ? 'Add files' : 'Add more'}
+          multiple
+          onPicked={(picked) => void attachAll(picked)}
+          onError={setError}
+          disabled={!canEdit}
+        />
       )}
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-    </>
-  );
-}
-
-function CategoryPicker({
-  document,
-  onSaved,
-}: {
-  document: FamilyDocument;
-  onSaved: () => Promise<void>;
-}) {
-  const [error, setError] = useState<string | null>(null);
-
-  async function choose(category: DocumentCategory) {
-    if (category === document.category) return;
-    const result = await setDocumentCategory(
-      createSupabaseDocumentGateway(getSupabase()),
-      document.id,
-      category,
-    );
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    setError(null);
-    await onSaved();
-  }
-
-  return (
-    <>
-      <View style={styles.picker}>
-        {DOCUMENT_CATEGORIES.map((option) => {
-          const active = option === document.category;
-          return (
-            <Pressable
-              key={option}
-              onPress={() => void choose(option)}
-              style={[styles.chip, active ? styles.chipActive : null]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-            >
-              <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>
-                {CATEGORY_LABELS[option]}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      <Text style={styles.hint}>{CATEGORY_HINTS[document.category]}</Text>
       {error ? <Text style={styles.error}>{error}</Text> : null}
     </>
   );
@@ -821,53 +668,21 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/**
- * A checkbox, and only ever for somebody who may change what it shows.
- *
- * **It had a `disabled` prop and no longer does.** That prop existed for the
- * non-author case, produced a checkbox a reader could see and not use, and is
- * the thing this PR was asked to remove: a disabled control invites an
- * interaction and then refuses it, so a reader cannot tell it apart from one
- * that is broken or still loading. The read-only presentation of a setting is a
- * sentence, which the caller renders instead.
- *
- * Deleted rather than left unused, for the reason this project keeps arriving at
- * from the other direction — an unreachable branch is where the next defect
- * hides, and `disabled` here would be a standing invitation to re-introduce the
- * exact problem.
- */
-function Toggle({
-  on,
-  label,
-  hint,
-  onToggle,
-}: {
-  on: boolean;
-  label: string;
-  hint: string;
-  onToggle: (next: boolean) => void;
-}) {
-  return (
-    <Pressable
-      onPress={() => onToggle(!on)}
-      style={styles.toggle}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: on }}
-    >
-      <Ionicons
-        name={on ? 'checkbox' : 'square-outline'}
-        size={22}
-        color={on ? theme.colors.primary : theme.colors.textMuted}
-      />
-      <View style={styles.toggleText}>
-        <Text style={styles.value}>{label}</Text>
-        <Text style={styles.hint}>{hint}</Text>
-      </View>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    backgroundColor: theme.colors.surfaceSunken,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.md,
+  },
+  noticeText: {
+    flex: 1,
+    color: theme.colors.text,
+    fontSize: theme.typography.caption,
+  },
   screen: {
     padding: theme.spacing.lg,
     paddingBottom: theme.spacing.xxl,
@@ -915,40 +730,6 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.caption,
     marginTop: 2,
   },
-  picker: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.sm,
-    marginBottom: theme.spacing.sm,
-  },
-  chip: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    borderRadius: theme.radius.full,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-  },
-  chipActive: {
-    backgroundColor: theme.colors.primarySoft,
-    borderColor: theme.colors.primary,
-  },
-  chipText: {
-    color: theme.colors.textMuted,
-    fontSize: theme.typography.caption,
-  },
-  chipTextActive: {
-    color: theme.colors.primary,
-    fontWeight: '600',
-  },
-  toggle: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.spacing.sm,
-  },
-  toggleText: {
-    flex: 1,
-  },
   actions: {
     gap: theme.spacing.md,
     marginTop: theme.spacing.md,
@@ -969,26 +750,6 @@ const styles = StyleSheet.create({
   },
   fileText: {
     flex: 1,
-  },
-  addFile: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
-    paddingVertical: theme.spacing.sm,
-  },
-  addFileText: {
-    color: theme.colors.primary,
-    fontSize: theme.typography.body,
-  },
-  cancelText: {
-    color: theme.colors.textMuted,
-    fontSize: theme.typography.body,
-  },
-  sourceList: {
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    marginTop: theme.spacing.sm,
-    paddingTop: theme.spacing.xs,
   },
   error: {
     color: theme.colors.error,

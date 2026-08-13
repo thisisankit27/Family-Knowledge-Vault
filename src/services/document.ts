@@ -196,6 +196,15 @@ export interface CreateDocumentInput {
   /** Whose document it is. A label only — see `setDocumentMember`. */
   memberId?: string | null;
   aiProcessing?: AiProcessing;
+  /**
+   * Who may read it. Optional, and when omitted the column's own default
+   * (`private`) applies rather than a default chosen here.
+   *
+   * Deliberately not defaulted in this interface. A second copy of "documents
+   * start private" — one in Postgres, one in TypeScript — is a thing that can
+   * disagree, and the one that would win is the one nobody was looking at.
+   */
+  visibility?: DocumentVisibility;
 }
 
 export interface DocumentGateway {
@@ -317,6 +326,13 @@ export async function createDocument(
   // they forgot, the constraint names a column.
   if (!isDocumentCategory(input.category)) {
     return { ok: false, message: 'Choose where this belongs.' };
+  }
+
+  // Same guard as `setDocumentVisibility`, and it matters more at creation: an
+  // unrecognised value makes `can_see_record` fail closed, so the document would
+  // be filed and then invisible to the person who filed it.
+  if (input.visibility !== undefined && !isDocumentVisibility(input.visibility)) {
+    return { ok: false, message: 'That visibility setting is not recognised.' };
   }
 
   const { data, error } = await gateway.createDocument({
@@ -648,7 +664,7 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
       return { data: data ? data.map(toDocument) : null, error };
     },
 
-    async createDocument({ familyId, title, category, memberId, aiProcessing }) {
+    async createDocument({ familyId, title, category, memberId, aiProcessing, visibility }) {
       // `created_by` is sent explicitly because the INSERT policy requires it
       // to equal auth.uid() — the database will not infer it, and a default
       // would let a client file a document in somebody else's name.
@@ -662,6 +678,11 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
           category,
           member_id: memberId ?? null,
           ai_processing: aiProcessing ?? 'denied',
+          // Omitted rather than defaulted when the caller says nothing, so the
+          // column's `private` default is what applies. Sending 'private'
+          // explicitly would work today and would quietly become the authority
+          // the day the column's default changed.
+          ...(visibility ? { visibility } : {}),
           created_by: session.user?.id ?? null,
         })
         .select(DOCUMENT_COLUMNS)

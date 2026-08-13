@@ -2021,3 +2021,196 @@ document and the metadata, which is the more valuable half.
 
 Then **PR-16 — the landing page**, and Phase 3 closes. It is stale by seven PRs (says 18 merged and
 463 tests; actual 25 and 687) and lists no Documents capability at all.
+
+---
+---
+
+# PR-15b Complete — One document, one form (2026-08-13)
+
+**472 CI tests, 240 RLS tests, fifteen migrations.** No migration — nothing about the data changed.
+
+**642 lines deleted against 209 added.** Making filing coherent was mostly deletion, which is the
+honest summary of the whole PR: almost no new capability, one defect class removed.
+
+## The defect
+
+Two screens independently decided what settings a document has. The filing form asked for a title and
+a shelf; everything else — subject, visibility, AI consent, the actual scan — could only be set
+afterwards, on a different screen. **They had already drifted twice**: consent existed only on the
+detail screen, and visibility (after PR-15a) only on the detail screen too.
+
+That is what duplicated ownership of one decision always does, and it will do it again in Phases 4–6
+because those reuse these screens' shape.
+
+## What shipped
+
+- **`app/(app)/(tabs)/documents/new.tsx`** — a modal route. Six fields plus an attachment list cannot
+  sit above a list without burying it, and `family/new.tsx` was already exactly this shape. The
+  library gets a button and is a library again: the first thing on it is what is in it.
+- **`src/components/DocumentFields.tsx`** — one component per field, composed by both screens.
+- **`src/components/ChipGroup.tsx`** — the primitive three copies of which had accumulated.
+- **`src/components/FileSourcePicker.tsx`** — the three sources, extracted because filing needs them
+  before a document exists.
+- **`src/services/filing.ts`** — the project's only orchestration module.
+- Deleted: `VisibilityPicker` (superseded), the detail screen's local `SubjectPicker`,
+  `CategoryPicker`, `Toggle` and `toCandidate`, and **eleven dead style blocks**.
+
+**The screens still own *saving*, and that difference is real rather than leftover.** Filing holds its
+answers until "File it"; the detail screen writes on each tap. A document that does not exist cannot
+be written per-field, and one that does should not need a Save button to change shelves.
+
+## Why filing cannot be a transaction, and what happens instead
+
+The storage path is `<family_id>/<document_id>/<uuid>.<ext>`, so the row must exist before a byte
+moves. One coherent *operation* is achievable; one transaction is not.
+
+**No rollback.** A failed attachment leaves the document and the files that worked. Deleting the
+document to "undo" would discard the title, category, subject and consent somebody just typed — the
+half that took thought — to tidy away the half that is one tap to retry. A test asserts
+`deleteDocument` is never called.
+
+## Four bugs, all found on a device, all the same shape
+
+Not the usual "stale assumption" story — every one was a **locally reasonable call that ignored a
+solution already sitting in the codebase**:
+
+| Symptom | Local reasoning | What it ignored |
+|---|---|---|
+| Readers saw a disabled checkbox (PR-15a) | "`disabled` says it is not yours" | The four fields beside it already fell back to a sentence |
+| No multi-select anywhere | never set `allowsMultipleSelection` | A passport is two pages; PR-14a changed the schema *for this* |
+| Detail screen kept single-select | "a batch is concurrent uploads behind one bar" | `filing.ts` solved that ten lines away with an index and a total |
+| A failed batch hid the files that worked | returned early on error | The reload it skipped is what makes the list true |
+
+**The habit for Phase 4: when adding a second caller for anything, read what the first one already
+does about the same problem.** The answer is usually already written.
+
+The third and fourth are worth separating. The third was me defending an inconsistency I had just
+introduced, in the same PR whose stated purpose was removing inconsistency. The fourth was the worst
+of the four in effect — files existed in storage and in `document_files`, and the screen showed
+neither, because the early `return` skipped the reload. Reported as "failed silently", which is what
+it looked like. **The list is least trustworthy at exactly the moment something went wrong**, so the
+reload belongs in `finally`.
+
+## A dialog is for a question, a banner is for a result
+
+The partial-failure message shipped as `Alert.alert` and was wrong twice: Android draws its own
+dialog over a screen this app styles deliberately, and a modal whose only button is "Open the
+document" is a confirmation prompt with nothing to confirm.
+
+It is now an in-app banner on the document screen, carried as a route param so it arrives *with* the
+screen and lands beside the control that fixes it. Dismissible via local state seeded from the param
+— a param survives every re-render, so a banner driven straight off one could not be got rid of.
+
+> **The rule, and both halves are already in this codebase:** a **system dialog** is a question that
+> blocks (`Delete <title>?`, `Remove this file?`). An **in-app banner** is a result, where the next
+> action is on the screen behind it.
+
+## A test-design mistake worth recording
+
+Airplane mode is not how to test upload failure on a dev client — **it kills the Metro connection
+too**, so you observe Expo Go dying rather than the app behaving. The deterministic substitute costs
+nothing: put one **disallowed file** (a video, a `.zip`, anything over 10MB) in a batch beside a valid
+photo. `validateFile` rejects it inside `uploadDocumentFile`, producing the identical `failed` entry
+with the network fully up.
+
+## Deliberate gaps
+
+- **No Save button on the detail screen.** Per-field immediate save stays; adding dirty state and a
+  discard-changes prompt is complexity the requirement did not ask for.
+- **The library's filter-row `Chip` was not folded into `ChipGroup`** — different semantics
+  (horizontal scroll, counts, an "All" entry), and it was the planned first cut line.
+- **No draft records.** Nothing is written until "File it": a half-filed document that exists because
+  somebody opened a form and changed their mind would show up in the library as one.
+- Specific-person sharing (Phase 10) and cross-family sharing (undesigned) are unchanged.
+
+## Next
+
+**PR-16 — the landing page, and Phase 3 closes.** It is stale by seven PRs and lists no Documents
+capability at all. `CLAUDE.md` specifies four edits and the rules for each.
+
+---
+---
+
+# PR-16 Complete — The landing page, and Phase 3 closes (2026-08-13)
+
+**No app code.** `CLAUDE.md` makes this the last act of every phase, and it had been skipped for
+seven PRs — the page said 18 merged and 463 tests while the repo was at 28 and 712, and it listed no
+Documents capability at all.
+
+## The four edits
+
+1. **Stats** — 18 → **28** merged, 463 → **712** tests (472 CI + 240 RLS), 12 phases unchanged. The
+   28 counts this page's own pull request, which is correct: it is merged by the time anyone reads the
+   number, and the stats sit directly above a link to the merged list.
+2. **"What works today"** — nine Documents lines added, each one a thing a stranger could actually do.
+   Filing in one step, six shelves and the filter, attachments up to 10MB, in-app photo preview, PDFs
+   in the phone's own reader, keeping a document private or sharing it with the family, rename /
+   re-file / reassign, archive / restore / delete.
+3. **"What does not work yet"** — nothing removed except the line that had become false. Seven new
+   entries; the honest one worth naming is **"the 'let AI read this' switch does nothing yet"**, which
+   is a visible control with no machine behind it until Phase 9. Also: sharing is all-or-nothing, no
+   cross-family sharing, no search, PDFs open elsewhere and *why* Google's viewer was refused,
+   deletion is permanent, and Guests see nothing at all.
+4. **Phase list** — 3 to `shipped`, 4 to `building`, and the `.status` line to *"Phase 4, Family
+   Memories"*.
+
+## Verification actually performed
+
+Rendering was checked rather than asserted, at **1280px and 390px in both colour schemes** — four
+headless Chrome captures, inspected. Phases 1–3 read SHIPPED, 4 reads BUILDING, the stats reflow to
+2+1 on mobile, both cards stack, and there is no horizontal overflow.
+
+**How to drive the theme, since `--force-dark-mode` does not do it.** The page resolves its palette
+from `localStorage` → `data-theme` → `prefers-color-scheme`, and headless Chrome ignores the dark-mode
+flag for the media query. Setting `data-theme` on `<html>` in a scratch copy exercises the same CSS
+paths the toggle uses, so it tests the real thing. The scratch copy also hides the other sections, so
+a 2600px window contains the whole of `#progress`.
+
+All three external links return 200.
+
+## The asymmetry is deliberate
+
+The wins column is visibly shorter than the gaps column, leaving whitespace. That was left alone.
+`CLAUDE.md` says the gaps list is the strongest trust signal on the page and does not get quietly
+shortened, and padding the wins list to balance a layout would be the exact failure the section
+exists to prevent. Anyone can publish wins.
+
+## Phase 3 is done
+
+Eleven through 16: library, categories, detail, upload, preview, sharing, filing flow, landing page.
+**Phase 4 — Family Memories — is next**, and `docs/17` §13 flags the decision it must make first:
+**shared vs per-domain file tables.** `document_files` ships alone today; at two tables it is a
+rename, at six a rewrite. Settle it before `memory_files` exists.
+
+## An operational note, twice
+
+`pkill -f "expo start"` and `pkill -f "http.server 809"` both **matched the shell command running
+them** and killed the session instead of the target. Kill by pid from `pgrep` with a bracketed
+pattern (`http[.]server`), or the pattern finds itself.
+
+## Correction, same day — Phase 3 did not reach `master` on the first attempt
+
+**PR-15b (#27) and PR-16 (#28) were raised as a stack** — #27 based on
+`pr-15a-document-sharing`, #28 based on `pr-15b-document-form` — because 15b's filing form needs the
+visibility control 15a introduced.
+
+**GitHub only re-points a stacked pull request at `master` when its base branch is *deleted* after
+merging.** The bases were not deleted. So #27 merged PR-15b into `pr-15a-document-sharing`, #28 merged
+PR-16 into `pr-15b-document-form`, all three read MERGED, and **`master` received neither**. Nothing
+was lost — `pr-16-landing-page` held all four commits, and its tree was byte-identical to
+`pr-15b-document-form` — but the phase was not actually shipped.
+
+Fixed with one pull request from `pr-16-landing-page` to `master`, carrying all four commits. That
+branch was the right source rather than `pr-15b-document-form`: identical tree, and no intra-branch
+merge commits in the history.
+
+**It also cost a number.** The landing page had just been set to 28, which was true at the moment it
+was written and false the moment a twenty-ninth pull request existed. Bumped to 29 in the same
+PR — the stats sit directly above a link to the merged list, so the figure has to be whatever that
+link returns, counting every merged pull request regardless of what it merged into.
+
+**The rule for this project: do not stack pull requests.** The convention is one PR per day into
+`master`, and it exists partly for this reason. When work genuinely depends on unmerged work, either
+wait for the base to land and branch from `master`, or retarget the child to `master` by hand *before*
+merging it. A stacked PR that says MERGED is indistinguishable from a shipped one until somebody
+checks `master`.
