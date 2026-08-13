@@ -1,4 +1,5 @@
 import {
+  AI_PROCESSING_LABELS,
   AI_PROCESSING_MODES,
   CATEGORY_HINTS,
   CATEGORY_LABELS,
@@ -21,10 +22,14 @@ import {
   setDocumentAiProcessing,
   setDocumentCategory,
   setDocumentMember,
+  setDocumentVisibility,
   validateDocumentTitle,
+  VISIBILITY_HINTS,
+  VISIBILITY_LABELS,
   type CreateDocumentInput,
   type AiProcessing,
   type DocumentCategory,
+  type DocumentVisibility,
   type DocumentGateway,
   type FamilyDocument,
 } from './document';
@@ -67,6 +72,9 @@ function fakeGateway(overrides: Partial<DocumentGateway> = {}): DocumentGateway 
       return { error: null };
     },
     async setAiProcessing() {
+      return { error: null };
+    },
+    async setVisibility() {
       return { error: null };
     },
     async archiveDocument() {
@@ -519,6 +527,115 @@ describe('setDocumentAiProcessing', () => {
   });
 });
 
+describe('setDocumentVisibility', () => {
+  it.each([...DOCUMENT_VISIBILITIES])('accepts %s', async (visibility) => {
+    let received: string | null = null;
+    const gateway = fakeGateway({
+      async setVisibility(_id, value) {
+        received = value;
+        return { error: null };
+      },
+    });
+
+    expect(await setDocumentVisibility(gateway, 'doc-1', visibility)).toEqual({ ok: true });
+    expect(received).toBe(visibility);
+  });
+
+  it('never sends a value the resolver would not recognise', async () => {
+    // This matters more here than for the other vocabularies. `can_see_record`
+    // fails closed on a value it does not know, so an unrecognised visibility
+    // reaching the column would hide the document from its own author — a
+    // failure with no error and no obvious cause.
+    const setVisibility = jest.fn(async () => ({ error: null }));
+    const result = await setDocumentVisibility(
+      fakeGateway({ setVisibility }),
+      'doc-1',
+      'everyone' as DocumentVisibility,
+    );
+
+    expect(result).toEqual({ ok: false, message: 'That visibility setting is not recognised.' });
+    expect(setVisibility).not.toHaveBeenCalled();
+  });
+
+  it('reports a refused write in the reader\'s words, not Postgres\'s', async () => {
+    // What a member gets if they try to publish somebody else's document: the
+    // UPDATE policy is keyed to `created_by`, so this is the real failure path.
+    const gateway = fakeGateway({
+      async setVisibility() {
+        return { error: { message: 'new row violates row-level security policy' } };
+      },
+    });
+
+    expect(await setDocumentVisibility(gateway, 'doc-1', 'family')).toEqual({
+      ok: false,
+      message: 'You do not have permission to do that.',
+    });
+  });
+
+  it('does not decide for itself who may share', async () => {
+    // There is no author argument and no author check, on purpose. The UPDATE
+    // policy owns that rule; a copy of it here would be a second permission
+    // model, and only one of the two is covered by the RLS suite.
+    expect(setDocumentVisibility).toHaveLength(3);
+  });
+});
+
+describe('the AI consent decision can be stated, not just asked', () => {
+  // Exists because sharing gave this field a second audience. The author is
+  // asked; a reader is told. A disabled checkbox tries to do both and does
+  // neither — see the read-only branch on the document detail screen.
+  it.each([...AI_PROCESSING_MODES])('states %s as a fact', (mode) => {
+    expect(AI_PROCESSING_LABELS[mode]).toBeTruthy();
+  });
+
+  it('never claims AI *cannot* read the document', () => {
+    // The server can read the bytes. This flag is a promise kept by code, and
+    // the only thing that would make it a guarantee is Phase 11's encryption.
+    // "may not" is a permission; "cannot" would be a capability claim, and an
+    // untrue one.
+    for (const mode of AI_PROCESSING_MODES) {
+      expect(AI_PROCESSING_LABELS[mode]).not.toMatch(/cannot|can't|never/i);
+      expect(AI_PROCESSING_LABELS[mode]).toMatch(/may/i);
+    }
+  });
+
+  it('reads the same on the card as on the detail screen', () => {
+    // The library badge renders AI_PROCESSING_LABELS.allowed rather than its own
+    // string. Two hand-typed copies of one flag's wording eventually disagree,
+    // and the flag is about privacy.
+    expect(AI_PROCESSING_LABELS.allowed).toBe('AI may read this');
+    expect(AI_PROCESSING_LABELS.denied).toBe('AI may not read this');
+  });
+});
+
+describe('the visibility vocabulary is shown in words a family can read', () => {
+  it.each([...DOCUMENT_VISIBILITIES])('gives %s a label and a hint', (visibility) => {
+    expect(VISIBILITY_LABELS[visibility]).toBeTruthy();
+    expect(VISIBILITY_HINTS[visibility]).toBeTruthy();
+  });
+
+  it('says private excludes owners, because docs/15 §8.4 decided it does', () => {
+    // The copy has to be as true as the policy. `can_see_record` has no role
+    // branch for 'private' — not Owner, not Admin — so a hint that merely said
+    // "only you" would understate it, and one that said "your family cannot see
+    // this unless you allow it" would be the vaguer claim the honesty standard
+    // exists to prevent.
+    expect(VISIBILITY_HINTS.private).toMatch(/not even an owner/i);
+  });
+
+  it('says a Guest cannot read a family-visible document', () => {
+    // Falls out of the model rather than being enforced here: the 'family'
+    // branch delegates to `can_read_records`, an allow-list of owner, admin and
+    // member. The hint has to say so or the control overstates what it does.
+    expect(VISIBILITY_HINTS.family).toMatch(/guest/i);
+  });
+
+  it('names the two options from the reader\'s side', () => {
+    expect(VISIBILITY_LABELS.private).toBe('Only me');
+    expect(VISIBILITY_LABELS.family).toBe('Everyone in the family');
+  });
+});
+
 describe('setDocumentMember', () => {
   it('names the person a document is about', async () => {
     let received: string | null | undefined;
@@ -652,10 +769,16 @@ describe('the vocabularies mirror the database', () => {
     expect(['family', 'private']).toContain(value);
   });
 
-  it('keeps family in the vocabulary even though nothing sets it', () => {
-    // The column still allows it so PR-15 has somewhere to put sharing. If this
-    // ever becomes reachable again, the RLS suite is what must be updated first.
-    expect(DOCUMENT_VISIBILITIES).toContain('family');
+  it('offers the narrower choice first, because the picker renders this order', () => {
+    // Was "keeps family in the vocabulary even though nothing sets it" — the
+    // column allowed 'family' with no way to reach it, waiting for PR-15. It is
+    // reachable now, so the test that guarded a placeholder becomes the one that
+    // pins the order a person reads the two options in.
+    //
+    // Broadening access should look like a deliberate act, which it does not if
+    // "Everyone in the family" is the first thing the eye lands on. A third
+    // value in Phase 10 goes after both of these, for the same reason.
+    expect(DOCUMENT_VISIBILITIES).toEqual(['private', 'family']);
   });
 
   it('defaults AI processing to denied, because consent never given is not consent', () => {

@@ -10,12 +10,14 @@ import { Button } from '../../../../../src/components/Button';
 import { ProgressBar } from '../../../../../src/components/ProgressBar';
 import { LockedNotice } from '../../../../../src/components/LockedNotice';
 import { TextField } from '../../../../../src/components/TextField';
+import { VisibilityPicker } from '../../../../../src/components/VisibilityPicker';
 import { formatRelativeTime } from '../../../../../src/lib/relativeTime';
 import { getSupabaseEnv } from '../../../../../src/lib/env';
 import { getSupabase } from '../../../../../src/lib/supabase';
 import { useAuth } from '../../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../../src/providers/FamilyProvider';
 import {
+  AI_PROCESSING_LABELS,
   CATEGORY_HINTS,
   CATEGORY_LABELS,
   DOCUMENT_CATEGORIES,
@@ -29,7 +31,9 @@ import {
   setDocumentArchived,
   setDocumentCategory,
   setDocumentMember,
+  setDocumentVisibility,
   MAX_DOCUMENT_TITLE_LENGTH,
+  VISIBILITY_LABELS,
   type DocumentCategory,
   type FamilyDocument,
 } from '../../../../../src/services/document';
@@ -57,17 +61,19 @@ import { theme } from '../../../../../src/theme';
  * It is also where `category` and `ai_processing` finally get controls, both
  * having shipped as columns with policies, tests and no way to change them.
  *
- * `visibility` deliberately has no control. Every document is private and only
- * its author can read it, so there is nothing to choose; the toggle that used
- * to be here was removed with 20260810090000 rather than left offering a
- * setting that would publish a document before sharing has been designed.
- * PR-15 brings it back with a model behind it.
+ * **`visibility` now has one too.** It was removed with 20260810090000 rather
+ * than left offering a setting that would publish a document before sharing had
+ * been designed; 20260813090000 designed it, so the control is back and the
+ * model behind it is one sentence: reading widens, writing never does.
+ *
+ * That sentence is also why this screen changed shape. Until sharing existed,
+ * every document you could open was one you had filed, so "may I edit this" was
+ * safely a question about your *role*. It is not any more — see `canEdit` below.
  */
 export default function DocumentDetailScreen() {
   const { documentId } = useLocalSearchParams<{ documentId: string }>();
   const { family, role } = useFamily();
   const { session } = useAuth();
-  const canEdit = canWriteRecords(role);
   const familyId = family?.id ?? null;
 
   const [document, setDocument] = useState<FamilyDocument | null>(null);
@@ -117,6 +123,33 @@ export default function DocumentDetailScreen() {
     );
   }
 
+  /*
+    Authorship, not role — and this is the line that mattered most in PR-15a.
+
+    It used to read `canWriteRecords(role)`, which was correct only while every
+    document you could open was one you had filed. Sharing makes "someone else's
+    document, in front of you" a reachable state for the first time, and a role
+    check answers the wrong question about it: a member may write records in
+    general and still have no business renaming this one.
+
+    Nothing would have caught it. It typechecks, and 655 tests passed. The class
+    of bug is the one PR-9b named — when a PR makes a previously impossible state
+    reachable, every boolean that assumed two states is now wrong, and neither
+    the compiler nor the suite will say so. It was found by grepping for the old
+    assumption, which is the only thing that finds it.
+
+    `can_write_records` stays in the conjunction rather than being replaced: it is
+    what excludes a Guest, and an author whose role was reduced *after* filing
+    should lose the controls. The UPDATE policy says exactly this, in the same
+    two parts.
+
+    A null `created_by` means the account was deleted, and then nobody is the
+    author — matching the policy, where `created_by = auth.uid()` cannot match
+    null either.
+  */
+  const isAuthor = document.createdBy !== null && document.createdBy === session?.user.id;
+  const canEdit = isAuthor && canWriteRecords(role);
+
   return (
     <ScrollView contentContainerStyle={styles.screen}>
       <Title document={document} canEdit={canEdit} onSaved={load} />
@@ -139,28 +172,96 @@ export default function DocumentDetailScreen() {
         )}
       </Field>
 
+      {/*
+        Directly under "Belongs to" and "Filed under", and directly above the
+        consent toggle, because all four are the same kind of thing: what this
+        document *is* and who it is for. Sitting it next to "Belongs to" is also
+        the clearest possible statement that they are different questions — the
+        one above is a label, this one is the access control, and the hint under
+        each says so.
+      */}
+      <Field label="Who can see it">
+        {canEdit ? (
+          <VisibilityPicker
+            value={document.visibility}
+            onChange={(next) =>
+              void save(
+                () =>
+                  setDocumentVisibility(
+                    createSupabaseDocumentGateway(getSupabase()),
+                    document.id,
+                    next,
+                  ),
+                load,
+                setError,
+              )
+            }
+          />
+        ) : (
+          /*
+            Shown read-only rather than hidden. Somebody reading a document that
+            was shared with them is entitled to know it was shared — and the
+            alternative, a field that silently disappears for non-authors, would
+            make the library feel as though it were hiding something when the
+            truth is the opposite.
+          */
+          <Text style={styles.value}>{VISIBILITY_LABELS[document.visibility]}</Text>
+        )}
+      </Field>
+
       <Field label="AI">
-        <Toggle
-          on={document.aiProcessing === 'allowed'}
-          label="Let AI read this"
-          // Deliberately not "AI cannot see this". The server can read the
-          // bytes; this is a promise kept by code. The control that would be a
-          // guarantee is Phase 11's encryption, and it is a different thing.
-          hint="Used later to search and organise. Nothing reads it yet."
-          disabled={!canEdit}
-          onToggle={(next) =>
-            void save(
-              () =>
-                setDocumentAiProcessing(
-                  createSupabaseDocumentGateway(getSupabase()),
-                  document.id,
-                  next ? 'allowed' : 'denied',
-                ),
-              load,
-              setError,
-            )
-          }
-        />
+        {canEdit ? (
+          <Toggle
+            on={document.aiProcessing === 'allowed'}
+            label="Let AI read this"
+            // Deliberately not "AI cannot see this". The server can read the
+            // bytes; this is a promise kept by code. The control that would be a
+            // guarantee is Phase 11's encryption, and it is a different thing.
+            hint="Used later to search and organise. Nothing reads it yet."
+            onToggle={(next) =>
+              void save(
+                () =>
+                  setDocumentAiProcessing(
+                    createSupabaseDocumentGateway(getSupabase()),
+                    document.id,
+                    next ? 'allowed' : 'denied',
+                  ),
+                load,
+                setError,
+              )
+            }
+          />
+        ) : (
+          /*
+            **A reader gets the decision, not the control.**
+
+            This field used to render the `Toggle` with `disabled={!canEdit}` for
+            everybody, which was unreachable code written when only the author
+            could open this screen. Sharing made it reachable and it was the only
+            field on the screen presenting itself that way — the other four all
+            fall back to a statement.
+
+            A disabled checkbox is worse than either option it sits between. It
+            asks a question, shows an answer, and then refuses the interaction it
+            just invited; a reader cannot tell whether it is broken, still
+            loading, or simply not theirs. The author's decision is a *fact about
+            the document*, and facts are sentences.
+
+            Same class of defect as the ten `canWriteRecords(role)` call sites
+            this PR corrected: a branch that was dead while every reader was also
+            the author, and wrong the moment that stopped being true. Worth
+            re-checking whenever a phase makes a new kind of reader possible.
+          */
+          <>
+            <Text style={styles.value}>{AI_PROCESSING_LABELS[document.aiProcessing]}</Text>
+            <Text style={styles.hint}>
+              {/* Whose choice it was matters here — it is not the reader's, and
+                  saying so is what stops the line reading like a setting they
+                  have failed to find. */}
+              Chosen by whoever filed it. Nothing reads it yet.
+            </Text>
+          </>
+        )}
       </Field>
 
       <Field label="Filed by">
@@ -720,25 +821,38 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/**
+ * A checkbox, and only ever for somebody who may change what it shows.
+ *
+ * **It had a `disabled` prop and no longer does.** That prop existed for the
+ * non-author case, produced a checkbox a reader could see and not use, and is
+ * the thing this PR was asked to remove: a disabled control invites an
+ * interaction and then refuses it, so a reader cannot tell it apart from one
+ * that is broken or still loading. The read-only presentation of a setting is a
+ * sentence, which the caller renders instead.
+ *
+ * Deleted rather than left unused, for the reason this project keeps arriving at
+ * from the other direction — an unreachable branch is where the next defect
+ * hides, and `disabled` here would be a standing invitation to re-introduce the
+ * exact problem.
+ */
 function Toggle({
   on,
   label,
   hint,
-  disabled,
   onToggle,
 }: {
   on: boolean;
   label: string;
   hint: string;
-  disabled?: boolean;
   onToggle: (next: boolean) => void;
 }) {
   return (
     <Pressable
-      onPress={() => !disabled && onToggle(!on)}
+      onPress={() => onToggle(!on)}
       style={styles.toggle}
       accessibilityRole="switch"
-      accessibilityState={{ checked: on, disabled }}
+      accessibilityState={{ checked: on }}
     >
       <Ionicons
         name={on ? 'checkbox' : 'square-outline'}
