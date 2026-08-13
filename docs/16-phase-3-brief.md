@@ -37,6 +37,21 @@ The underlying cause is the same one that made ten `canWriteRecords(role)` call 
 written while every reader was also the author. Grep found the ten that changed a permission; only
 running the app found the one that changed a presentation.
 
+**PR-15b then found four more of the same shape, all in code written hours earlier**, and the pattern
+is worth naming because it is not the usual "old assumption" story. Each was a *locally reasonable
+call that ignored a solution already present in the codebase*:
+
+| Symptom | The local reasoning | What it ignored |
+|---|---|---|
+| Readers saw a disabled checkbox | "`disabled` communicates it is not yours" | The four fields beside it already fell back to a sentence |
+| No multi-select anywhere | never set `allowsMultipleSelection` | A passport is two pages — the schema was changed for this in PR-14a |
+| Detail screen stayed single-select | "a batch means concurrent uploads behind one bar" | `filing.ts` had solved that ten lines away with an index and a total |
+| A failed batch hid the files that worked | returned early on error | The reload it skipped is what makes the list true |
+
+Three of the four were reported from a device after the suite was green. **The habit to carry into
+Phase 4: when adding a second caller for anything, read what the first one already does about the
+same problem** — the answer is usually already written.
+
 ---
 
 # 1. Purpose
@@ -225,7 +240,7 @@ across sessions.
 | **14a Upload** | Bucket, `storage.objects` policies, path allocator, picker, upload with real progress | Where §3.2's decisions come due. **Split confirmed — see the amendment below.** |
 | **14b Preview** | Open an attached file; images preview in-app, PDFs open in the device's own reader; share sheet for "Download" | FR-014's last two actions. **No WebView** — see §5's correction. |
 | **15a Sharing** | ~~Un-vacated 2026-08-09~~ → **shipped 2026-08-13.** `visibility` gets a control: *Only me* / *Everyone in the family*. Read widens, write never does. | **Neither** option in the old note was taken. `member_id` stays a pure label — restoring it to the resolver is the escalation §8.4 removed — and no `record_shares` table was added, because the two-value model has not failed a story yet. One new function, one replaced policy, both on `storage.objects`. |
-| **15b One document, one form** | **Re-scoped 2026-08-13.** Title, category, Belongs to, *Who can see it*, AI consent and attachments are configured **at filing time**, and the same settings stay editable on the detail screen. | Not new capability — existing capability stopped being spread across two screens that each decided independently what a document has. They had already drifted. |
+| **15b One document, one form** | ~~Re-scoped 2026-08-13~~ → **shipped 2026-08-13.** Title, category, Belongs to, *Who can see it*, AI consent and attachments are configured **at filing time**, in a modal route; the same fields stay editable on the detail screen. | Almost no new capability — 642 lines deleted against 209 added. What shipped is *one owner per field* (`src/components/DocumentFields.tsx`), which is what stops two screens deciding independently what a document has. They had already drifted twice. |
 
 Phase 4 (Memories) and Phase 5 (Medical) both explicitly reuse this phase's upload and CRUD
 patterns, so a shortcut taken here is taken three times.
