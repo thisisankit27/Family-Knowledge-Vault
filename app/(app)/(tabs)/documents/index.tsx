@@ -10,11 +10,9 @@ import {
   View,
 } from 'react-native';
 
-import { Button } from '../../../../src/components/Button';
 import { EmptyState } from '../../../../src/components/EmptyState';
 import { LockedNotice } from '../../../../src/components/LockedNotice';
 import { Screen } from '../../../../src/components/Screen';
-import { TextField } from '../../../../src/components/TextField';
 import { formatRelativeTime } from '../../../../src/lib/relativeTime';
 import { getSupabase } from '../../../../src/lib/supabase';
 import { TAB_DOMAINS } from '../../../../src/navigation/domains';
@@ -22,18 +20,15 @@ import { useAuth } from '../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../src/providers/FamilyProvider';
 import {
   AI_PROCESSING_LABELS,
-  CATEGORY_HINTS,
   CATEGORY_LABELS,
   DOCUMENT_CATEGORIES,
   countByCategory,
-  createDocument,
   createSupabaseDocumentGateway,
   describeDocumentAuthor,
   describeDocumentSubject,
   filterByCategory,
   listDocuments,
   partitionDocuments,
-  MAX_DOCUMENT_TITLE_LENGTH,
   type DocumentCategory,
   type FamilyDocument,
 } from '../../../../src/services/document';
@@ -137,7 +132,28 @@ function DocumentLibrary({ familyId, canFile }: { familyId: string; canFile: boo
 
   return (
     <Screen title={domain.label} subtitle={domain.summary}>
-      {canFile ? <FileDocument familyId={familyId} onFiled={load} /> : null}
+      {/*
+        A button, where an inline form used to be.
+
+        That form asked for a title and a shelf, and everything else a document
+        carries had to be set afterwards on a different screen — which is not
+        filing a document so much as starting one. The full set of questions does
+        not fit above a list without burying it, so filing moved to its own modal
+        (`new.tsx`), the same shape the Family tab already uses for adding a
+        person.
+
+        The library is a library again: the first thing on it is what is in it.
+      */}
+      {canFile ? (
+        <Pressable
+          onPress={() => router.push('/(app)/(tabs)/documents/new')}
+          style={styles.fileAction}
+          accessibilityRole="button"
+        >
+          <Ionicons name="add-circle-outline" size={20} color={theme.colors.primary} />
+          <Text style={styles.fileActionText}>File a document</Text>
+        </Pressable>
+      ) : null}
 
       {error ? (
         <View style={styles.notice}>
@@ -361,93 +377,19 @@ function DocumentCard({
   );
 }
 
-/**
- * Filing a document with no file attached is the honest shape of this PR.
- *
- * A record can exist before its scan does — a passport you know the number of
- * but have not photographed yet is still worth recording — so this is not a
- * placeholder for upload so much as the thing upload will later attach to.
- */
-function FileDocument({ familyId, onFiled }: { familyId: string; onFiled: () => Promise<void> }) {
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<DocumentCategory | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleFile() {
-    if (!category) {
-      setError('Choose where this belongs.');
-      return;
-    }
-
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await createDocument(createSupabaseDocumentGateway(getSupabase()), {
-        familyId,
-        title,
-        category,
-      });
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      setTitle('');
-      setCategory(null);
-      await onFiled();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <View style={styles.form}>
-      <TextField
-        label="File a document"
-        value={title}
-        onChangeText={setTitle}
-        placeholder="Dad's Passport"
-        maxLength={MAX_DOCUMENT_TITLE_LENGTH}
-        editable={!busy}
-      />
-
-      {/*
-        All six are always offered here, unlike the filter row above. Filtering
-        is about what exists; filing is about what could. Hiding an unused shelf
-        at this point would make the first document of a kind impossible to file.
-      */}
-      <View style={styles.picker}>
-        {DOCUMENT_CATEGORIES.map((option) => (
-          <Chip
-            key={option}
-            label={CATEGORY_LABELS[option]}
-            active={category === option}
-            onPress={() => setCategory(category === option ? null : option)}
-          />
-        ))}
-      </View>
-
-      {/*
-        The hint is the reason the six read as obvious rather than as a quiz.
-        Shown only once a shelf is picked, so the form stays quiet until then.
-      */}
-      {category ? <Text style={styles.hint}>{CATEGORY_HINTS[category]}</Text> : null}
-
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Button label="File it" onPress={handleFile} busy={busy} disabled={busy} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  form: {
-    marginBottom: theme.spacing.lg,
-  },
-  picker: {
+  fileAction: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: theme.spacing.sm,
-    marginBottom: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+    minHeight: theme.touchTarget,
+  },
+  fileActionText: {
+    color: theme.colors.primary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
   },
   hint: {
     color: theme.colors.textMuted,

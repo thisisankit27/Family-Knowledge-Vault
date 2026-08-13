@@ -182,6 +182,61 @@ describe('createDocument', () => {
     expect(createDocumentSpy).not.toHaveBeenCalled();
   });
 
+  it('refuses an unrecognised visibility without calling the gateway', async () => {
+    // Filing is where this matters most: `can_see_record` fails closed on a value
+    // it does not know, so the document would exist and be invisible to the
+    // person who just filed it, with no error to explain why.
+    const createDocumentSpy = jest.fn();
+    const gateway = fakeGateway({ createDocument: createDocumentSpy });
+
+    const result = await createDocument(gateway, {
+      familyId: 'fam-1',
+      title: 'House Deed',
+      category: 'property',
+      visibility: 'everyone' as DocumentVisibility,
+    });
+
+    expect(result).toEqual({ ok: false, message: 'That visibility setting is not recognised.' });
+    expect(createDocumentSpy).not.toHaveBeenCalled();
+  });
+
+  it('leaves visibility unsent when the caller does not choose one', async () => {
+    // So the column's own `private` default applies. A second copy of "documents
+    // start private" — one in Postgres, one here — is a thing that can disagree,
+    // and the one that would win is the one nobody was looking at.
+    let received: CreateDocumentInput | null = null;
+    const gateway = fakeGateway({
+      async createDocument(input) {
+        received = input;
+        return { data: document(), error: null };
+      },
+    });
+
+    await createDocument(gateway, { familyId: 'fam-1', title: 'Deed', category: 'property' });
+
+    expect(received).not.toBeNull();
+    expect('visibility' in received!).toBe(false);
+  });
+
+  it('carries a chosen visibility through to the gateway', async () => {
+    let received: CreateDocumentInput | null = null;
+    const gateway = fakeGateway({
+      async createDocument(input) {
+        received = input;
+        return { data: document({ visibility: 'family' }), error: null };
+      },
+    });
+
+    await createDocument(gateway, {
+      familyId: 'fam-1',
+      title: 'House Deed',
+      category: 'property',
+      visibility: 'family',
+    });
+
+    expect(received!.visibility).toBe('family');
+  });
+
   it('trims the title before storing it', async () => {
     let received: CreateDocumentInput | null = null;
     const gateway = fakeGateway({

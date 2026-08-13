@@ -24,6 +24,13 @@ export default function DocumentsLayout() {
     >
       {/* The library draws its own title inside the scroll area. */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
+      {/* A modal, matching `family/new`. Filing is a self-contained act with a
+          clear end, and a modal is the shape that says so — it also keeps six
+          fields and an attachment list from burying the library beneath them. */}
+      <Stack.Screen
+        name="new"
+        options={{ title: 'File a document', presentation: 'modal' }}
+      />
       <Stack.Screen name="[documentId]/index" options={{ title: 'Document' }} />
       {/* The viewer sets its own title to the file's name, the way the Family
           tab's member screen sets a person's. A generic "File" would be worse
