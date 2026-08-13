@@ -9,9 +9,11 @@
  * written here would be a second permission model that the RLS suite does not
  * test, and the first place the two disagreed would be a leak.
  *
- * The model those policies enforce, as of 20260810090000: **a document belongs
- * to whoever filed it, and to nobody else.** Not the family Owner, not the
- * person it is about. Sharing arrives in PR-15.
+ * The model those policies enforce, as of 20260813090000: **a document belongs
+ * to whoever filed it, and reaches anybody else only because its author said
+ * so.** Read widens with `visibility`; write never does. Not the family Owner,
+ * not the person it is about — the author, and whoever the author shared with,
+ * and for reading only.
  *
  * What it does own is the vocabulary the UI speaks: a document has a *title*
  * and a *subject*, never a filename and a folder. `docs/10-ui-ux-design.md` §13
@@ -37,14 +39,84 @@ export const AI_PROCESSING_MODES = ['allowed', 'denied'] as const;
 export type AiProcessing = (typeof AI_PROCESSING_MODES)[number];
 
 /**
- * Mirrors `documents.visibility`.
+ * The consent decision stated as a fact, for a reader who did not make it.
  *
- * **Nothing sets this today.** Every document is `private` by default and only
- * its author can read it; the second value survives so PR-15 has somewhere to
- * put sharing rather than needing a constraint change on top of a design.
+ * Needed because sharing made a second audience for this field. The author gets
+ * a control — a question they answer. Anybody the document was shared with gets
+ * **the answer**, because it is not theirs to change and a disabled control
+ * asking a question it will not accept an answer to is worse than a sentence.
+ *
+ * Phrased "may" rather than "can", and never "cannot see": the server is able to
+ * read the bytes, and this flag is a promise kept by code rather than a
+ * technical barrier. The control that would be a guarantee is Phase 11's
+ * encryption, which is a different thing and must not be implied here.
  */
-export const DOCUMENT_VISIBILITIES = ['family', 'private'] as const;
+export const AI_PROCESSING_LABELS: Record<AiProcessing, string> = {
+  allowed: 'AI may read this',
+  denied: 'AI may not read this',
+};
+
+/**
+ * Mirrors `documents.visibility`. Who may *read* a document.
+ *
+ * Two values, and both are words a family can be shown — which is why
+ * "restricted" was rejected for `private` back in `docs/15` §8.2: it is
+ * developer language and it never says restricted *to whom*.
+ *
+ * `private` is the default and stays the default. Broadening access is
+ * something a person does to one document on purpose; it is never where a
+ * document starts.
+ *
+ * **This decides reading only.** Editing, archiving, deleting and attaching are
+ * the author's alone at every value, enforced by separate policies keyed on
+ * `created_by`. A single column deciding both is what produced the escalation
+ * `20260810090000` closed — see `setDocumentMember`.
+ *
+ * Order is `private` first, and it is load-bearing rather than alphabetical:
+ * `VisibilityPicker` renders this list in order, so the first entry is the chip a
+ * person reads first. The narrower option leading, and being the one already
+ * selected, is what makes broadening access look like the deliberate act it is.
+ * (The default itself lives in the column, not here.)
+ */
+export const DOCUMENT_VISIBILITIES = ['private', 'family'] as const;
 export type DocumentVisibility = (typeof DOCUMENT_VISIBILITIES)[number];
+
+/**
+ * How the two values are named on screen.
+ *
+ * Written from the reader's side — "Only me", not "Private" — because the
+ * question the control answers is *who can open this*, and a person answers
+ * that with people rather than with an adjective.
+ */
+export const VISIBILITY_LABELS: Record<DocumentVisibility, string> = {
+  private: 'Only me',
+  family: 'Everyone in the family',
+};
+
+/**
+ * What each choice actually means, in one sentence.
+ *
+ * `private` says "not even an owner" out loud, and that is deliberate. `docs/15`
+ * §8.4 decided that no role reads a private record — not Owner, not Admin — and
+ * a UI that said "private" while an admin could read the row would be exactly
+ * the claim the landing page's honesty standard forbids. The copy has to be as
+ * true as the policy.
+ *
+ * `family` says Guests are excluded, because they are: the `'family'` branch of
+ * `can_see_record` delegates to `can_read_records`, which is an allow-list of
+ * owner, admin and member. That falls out of the model rather than being
+ * remembered here.
+ */
+export const VISIBILITY_HINTS: Record<DocumentVisibility, string> = {
+  private: 'Nobody else can open this — not even an owner.',
+  family: 'Anyone with access to this family can open it. Guests cannot.',
+};
+
+export function isDocumentVisibility(value: unknown): value is DocumentVisibility {
+  return (
+    typeof value === 'string' && (DOCUMENT_VISIBILITIES as readonly string[]).includes(value)
+  );
+}
 
 /**
  * The six shelves, from `docs/06-information-architecture.md` §4.
@@ -142,6 +214,10 @@ export interface DocumentGateway {
   setAiProcessing(
     documentId: string,
     aiProcessing: AiProcessing,
+  ): Promise<{ error: { message: string } | null }>;
+  setVisibility(
+    documentId: string,
+    visibility: DocumentVisibility,
   ): Promise<{ error: { message: string } | null }>;
   archiveDocument(documentId: string, archived: boolean): Promise<{ error: { message: string } | null }>;
   deleteDocument(documentId: string): Promise<{ error: { message: string } | null }>;
@@ -347,6 +423,48 @@ export async function setDocumentMember(
   memberId: string | null,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const { error } = await gateway.setMember(documentId, memberId);
+  if (error) return { ok: false, message: describeDocumentError(error.message) };
+  return { ok: true };
+}
+
+/**
+ * Say who may *open* a document.
+ *
+ * The other half of the pair above, and the reason both exist. `setDocumentMember`
+ * answers "whose passport is this"; this answers "who may read it". They were one
+ * column once, and that is the bug `20260810090000` closed.
+ *
+ * Two values only. `private` is the author alone — genuinely alone, an owner
+ * included — and `family` is everyone with access except Guests. Specific-person
+ * sharing is not here and is not missing: `docs/15` §10 puts per-record ACLs in
+ * Phase 10, §8.1 makes adding a third value one function body, and no
+ * requirement yet needs one.
+ *
+ * **Only the author can call this successfully.** Not enforced here — the UPDATE
+ * policy on `documents` is keyed to `created_by`, so a reader's attempt to
+ * publish somebody else's document matches no row and changes nothing. A check
+ * in this function would be a second permission model, and the first place the
+ * two disagreed would be the leak.
+ *
+ * Widening is not a one-way door. Setting it back to `private` withdraws the
+ * row, its file rows, its people links and its bytes in the same instant,
+ * because all four resolve through `can_see_record`.
+ */
+export async function setDocumentVisibility(
+  gateway: DocumentGateway,
+  documentId: string,
+  visibility: DocumentVisibility,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  // Checked before the round trip for the same reason as category: the
+  // constraint's message names a column, and this one names the mistake. It also
+  // means an unrecognised value never reaches the database at all, which matters
+  // more here than elsewhere — `can_see_record` fails closed on a value it does
+  // not know, so a typo would silently hide the document from its own author.
+  if (!isDocumentVisibility(visibility)) {
+    return { ok: false, message: 'That visibility setting is not recognised.' };
+  }
+
+  const { error } = await gateway.setVisibility(documentId, visibility);
   if (error) return { ok: false, message: describeDocumentError(error.message) };
   return { ok: true };
 }
@@ -587,6 +705,18 @@ export function createSupabaseDocumentGateway(client: SupabaseClient): DocumentG
       const { error } = await client
         .from('documents')
         .update({ ai_processing: aiProcessing })
+        .eq('id', documentId);
+
+      return { error };
+    },
+
+    // No `.eq('created_by', …)` guard. The UPDATE policy already keys on it, and
+    // adding the same condition here would mean two places decide who may
+    // publish a document — with only one of them tested by the RLS suite.
+    async setVisibility(documentId, visibility) {
+      const { error } = await client
+        .from('documents')
+        .update({ visibility })
         .eq('id', documentId);
 
       return { error };

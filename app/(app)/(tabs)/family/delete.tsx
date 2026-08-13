@@ -76,9 +76,27 @@ export default function DeleteFamilyScreen() {
         setError(result.message);
         return;
       }
-      // The Family tab falls back to join-or-create once the provider re-reads.
-      await refresh();
+      /*
+        **Dismiss first, refresh second. The order is the whole fix.**
+
+        It used to `await refresh()` and then dismiss, which logged
+        *"POP_TO_TOP was not handled by any navigator"* on every successful
+        delete. `refresh()` sets `family` to `null`, the Family tab re-renders
+        into its join-or-create state, and this modal's own stack goes with it —
+        so the dismissal that follows is dispatched at a navigator that is no
+        longer there to handle it.
+
+        Dismissing while the navigator is still mounted, and letting the provider
+        catch up afterwards, costs nothing: the delete has already succeeded by
+        this line, and the Family tab re-reads on focus anyway.
+      */
       router.dismissAll();
+
+      // Not awaited before navigating, and deliberately still awaited: the
+      // provider is the app's single source of truth for the current family, and
+      // leaving it holding a family that no longer exists would let any screen
+      // reading it query a deleted id.
+      await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Something went wrong.');
     } finally {

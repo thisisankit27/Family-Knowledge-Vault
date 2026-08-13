@@ -655,6 +655,223 @@ describeRls('documents', () => {
     });
   });
 
+  /**
+   * 20260813090000 — an author can let the household in.
+   *
+   * The point of these tests is not that `visibility = 'family'` works; PR-9a
+   * already proved `can_see_record`'s branch by direct call. It is that **reading
+   * widened and nothing else did.** Every test below either confirms a reader can
+   * see, or confirms they cannot change — and the second group is the larger one
+   * on purpose, because §8.4's escalation was precisely a read predicate that had
+   * been allowed to decide writes.
+   */
+  describe('sharing', () => {
+    it('lets a member read a document another member shared with the family', async () => {
+      await inviteAndJoin(member, 'member');
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      expect((await read(member)).map((row) => row.id)).toEqual([shared.id]);
+    });
+
+    it('shows a shared document to the family owner, who could not read a private one', async () => {
+      // Both halves matter. The owner reading it proves 'family' means everyone
+      // with read access rather than "everyone except the person who happens to
+      // be looking"; the private one staying hidden proves §8.4 is intact and
+      // that this PR did not quietly give managers a way in.
+      await inviteAndJoin(member, 'member');
+      const shared = await file(member, memberId, {
+        title: 'My Degree',
+        visibility: 'family',
+      });
+      await file(member, memberId, { title: 'Therapy notes' });
+
+      expect((await read(owner)).map((row) => row.id)).toEqual([shared.id]);
+    });
+
+    it('still shows a guest nothing, because nobody widened the role', async () => {
+      // The one bug a sharing PR is most likely to ship. No role is named in any
+      // of these policies: 'family' delegates to `can_read_records`, an
+      // allow-list of owner, admin and member. If a Guest ever reads a shared
+      // document, the helper was turned into a deny-list somewhere.
+      await inviteAndJoin(guest, 'guest');
+      await file(owner, ownerId, { title: 'House Deed', visibility: 'family' });
+
+      const { data, error } = await guest
+        .from('documents')
+        .select(COLUMNS)
+        .eq('family_id', familyId);
+
+      // Filtered, not refused — a Guest holds the select grant. The screen has
+      // to ask the role, which is what LockedNotice exists for.
+      expect(error).toBeNull();
+      expect(data).toEqual([]);
+    });
+
+    it('still shows an outsider nothing', async () => {
+      // `has_family_access` gates every branch of the resolver, so sharing
+      // inside a family cannot reach outside one.
+      await file(owner, ownerId, { title: 'House Deed', visibility: 'family' });
+      expect(await read(outsider)).toEqual([]);
+    });
+
+    it('does not let a reader rename what they can see', async () => {
+      await inviteAndJoin(member, 'member');
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      await member.from('documents').update({ title: 'Renamed by a reader' }).eq('id', shared.id);
+
+      expect((await read(owner)).find((row) => row.id === shared.id)?.title).toBe('House Deed');
+    });
+
+    it('does not let a reader archive what they can see', async () => {
+      await inviteAndJoin(member, 'member');
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      await member
+        .from('documents')
+        .update({ archived_at: new Date().toISOString() })
+        .eq('id', shared.id);
+
+      expect((await read(owner)).find((row) => row.id === shared.id)?.archived_at).toBeNull();
+    });
+
+    it('does not let a reader delete what they can see', async () => {
+      await inviteAndJoin(member, 'member');
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      await member.from('documents').delete().eq('id', shared.id);
+
+      expect((await read(owner)).map((row) => row.id)).toEqual([shared.id]);
+    });
+
+    it('does not let a reader withdraw a document from the family', async () => {
+      // Sharing is the author's decision in both directions. A reader who could
+      // set this back to 'private' would be hiding somebody else's document from
+      // the household — vandalism rather than disclosure, but still not theirs.
+      await inviteAndJoin(member, 'member');
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      await member.from('documents').update({ visibility: 'private' }).eq('id', shared.id);
+
+      expect((await read(owner)).find((row) => row.id === shared.id)?.visibility).toBe('family');
+    });
+
+    it('does not let anyone publish a document they did not file', async () => {
+      // **This is §8.4's escalation, asserted from the other side.** Until
+      // 20260810090000 a named subject could set `visibility` to 'family' and
+      // publish the author's private document to the household. The subject
+      // position is null now, so the reader cannot even see the row — but the
+      // write is what mattered, and it is refused independently by a policy that
+      // keys on `created_by`.
+      await inviteAndJoin(member, 'member');
+      const ownerPerson = await personFor(ownerId);
+      const memberPerson = await personFor(memberId);
+
+      const priv = await file(owner, ownerId, {
+        title: 'Therapy notes',
+        member_id: memberPerson,
+      });
+
+      await member.from('documents').update({ visibility: 'family' }).eq('id', priv.id);
+
+      // Two assertions, because either one alone would be satisfied by a bug:
+      // the author's row is untouched, and the member still cannot see it.
+      expect((await read(owner)).find((row) => row.id === priv.id)?.visibility).toBe('private');
+      expect((await read(member)).map((row) => row.id)).toEqual([]);
+      expect(ownerPerson).toBeTruthy();
+    });
+
+    it('withdraws the row the moment the author changes their mind', async () => {
+      await inviteAndJoin(member, 'member');
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+      expect((await read(member)).map((row) => row.id)).toEqual([shared.id]);
+
+      const { error } = await owner
+        .from('documents')
+        .update({ visibility: 'private' })
+        .eq('id', shared.id);
+
+      expect(error).toBeNull();
+      expect(await read(member)).toEqual([]);
+    });
+
+    it('carries the people links with the row, so nothing hangs off an invisible parent', async () => {
+      // The four-predicate agreement, from 20260810090000 §5: "the row hidden,
+      // the things hanging off it not." It now has to hold in both directions —
+      // a visible row whose children are hidden is the same defect mirrored.
+      await inviteAndJoin(member, 'member');
+      const ownerPerson = await personFor(ownerId);
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      const { error: linkError } = await owner.from('document_members').insert({
+        family_id: familyId,
+        document_id: shared.id,
+        member_id: ownerPerson,
+      });
+      expect(linkError).toBeNull();
+
+      const { data } = await member
+        .from('document_members')
+        .select('member_id')
+        .eq('document_id', shared.id);
+      expect(data).toEqual([{ member_id: ownerPerson }]);
+    });
+
+    it('does not let a reader link people to a document they can see', async () => {
+      // `document_members` is a label table and its INSERT policy keys on the
+      // author, which is what stops a reader linking themselves to something and
+      // calling it theirs. Reading the links is not permission to write them.
+      await inviteAndJoin(member, 'member');
+      const memberPerson = await personFor(memberId);
+      const shared = await file(owner, ownerId, {
+        title: 'House Deed',
+        visibility: 'family',
+      });
+
+      const { error } = await member.from('document_members').insert({
+        family_id: familyId,
+        document_id: shared.id,
+        member_id: memberPerson,
+      });
+
+      expect(error).not.toBeNull();
+    });
+
+    it('takes a shared document with the family, same as a private one', async () => {
+      // The cascade question again, this time with the state this PR introduced.
+      // Sharing adds a policy path, and every previous phase has paid for
+      // assuming a new path behaves on the way out because it behaved on the way
+      // in.
+      await inviteAndJoin(member, 'member');
+      await file(owner, ownerId, { title: 'House Deed', visibility: 'family' });
+
+      const { error } = await owner.from('families').delete().eq('id', familyId);
+
+      expect(error).toBeNull();
+    });
+  });
+
   describe('document_files', () => {
     it('is not writable by any client', async () => {
       // No INSERT policy and no INSERT grant until PR-14, which adds them with

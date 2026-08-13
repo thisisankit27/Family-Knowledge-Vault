@@ -10,7 +10,13 @@ import { LockedNotice } from '../../../../../src/components/LockedNotice';
 import { getSupabaseEnv } from '../../../../../src/lib/env';
 import { formatRelativeTime } from '../../../../../src/lib/relativeTime';
 import { getSupabase } from '../../../../../src/lib/supabase';
+import { useAuth } from '../../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../../src/providers/FamilyProvider';
+import {
+  createSupabaseDocumentGateway,
+  getDocument,
+  type FamilyDocument,
+} from '../../../../../src/services/document';
 import { canWriteRecords } from '../../../../../src/services/role';
 import {
   createSupabaseStorageGateway,
@@ -41,9 +47,26 @@ import { theme } from '../../../../../src/theme';
 export default function FileViewerScreen() {
   const { documentId, fileId } = useLocalSearchParams<{ documentId: string; fileId: string }>();
   const { role } = useFamily();
-  const canEdit = canWriteRecords(role);
+  const { session } = useAuth();
 
   const [file, setFile] = useState<DocumentFile | null>(null);
+  /*
+    Only ever read for its author, which is why it holds the whole row rather
+    than a boolean: a screen that stored `canEdit` would be storing a conclusion,
+    and the next person to need the document for anything else would fetch it a
+    second time.
+
+    Sharing is what makes this necessary. Before it, reaching this screen at all
+    meant you had filed the document, so `canWriteRecords(role)` was a safe stand-in
+    for authorship. Now a member can be looking at somebody else's file, and the
+    role answers the wrong question — see the same correction on the detail screen.
+
+    Hiding the control is not decoration. Under RLS a delete that matches no
+    visible row **reports success**, so a Remove button left on screen for a
+    reader would appear to work, remove nothing, and leave the file sitting there
+    on the next load.
+  */
+  const [document, setDocument] = useState<FamilyDocument | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -89,6 +112,13 @@ export default function FileViewerScreen() {
       }
 
       setFile(found);
+
+      // Failure here is deliberately not an error the reader sees. The file
+      // loaded, so it is theirs to open; not knowing who filed it costs them
+      // only the Remove control, and the policy would refuse the removal anyway.
+      const owning = await getDocument(createSupabaseDocumentGateway(getSupabase()), documentId);
+      setDocument(owning.ok ? owning.document : null);
+
       if (isPreviewable(found.mimeType)) await mint(found);
       setLoading(false);
     })();
@@ -164,6 +194,10 @@ export default function FileViewerScreen() {
   }
 
   const previewable = isPreviewable(file.mimeType);
+  // The same two-part test the detail screen and the UPDATE policy both make:
+  // you filed it, and your role still lets you write records.
+  const isAuthor = document?.createdBy != null && document.createdBy === session?.user.id;
+  const canEdit = isAuthor && canWriteRecords(role);
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>

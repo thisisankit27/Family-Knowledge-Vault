@@ -13,6 +13,27 @@
  * the same family* is refused. Under the frozen predicate every one of them
  * would pass the check.
  *
+ * **Amended for 20260813090000 — four of those tests were asserting an
+ * assumption rather than a requirement, and this is where that was caught.**
+ *
+ * Sharing made "another member of the same family" the wrong subject for a blanket
+ * refusal. The requirement was never *"another member cannot reach these bytes"*;
+ * it was *"only somebody who can read the row can reach its bytes."* Those two
+ * sentences agreed exactly as long as every document was author-only, and a test
+ * suite cannot tell which of them it is defending while they agree.
+ *
+ * So four tests are renamed to say **private** out loud — reading, listing,
+ * minting a URL, and seeing the file rows — and each gains a shared-document
+ * counterpart asserting the opposite. Three others are untouched because they were
+ * always about writing, and writing did not widen: uploading, removing an object,
+ * and detaching a row stay with the author at every visibility.
+ *
+ * This is the same shape as PR-14a's own lesson ("21 storage RLS tests passed
+ * while this was broken. Every one asserted the *object* was gone; not one
+ * re-listed the rows") and PR-13's before it. The recurring instruction is to name
+ * the condition a test depends on, so that changing the condition breaks the name
+ * rather than silently keeping a stale guarantee.
+ *
  * Two more things are pinned here:
  *
  * **No client builds a path.** `allocate_document_file_path` is the only source,
@@ -36,6 +57,15 @@ const key =
 const PASSWORD = 'rls-test-password';
 const AUTHOR = { email: 'rls-store-author@example.com', password: PASSWORD };
 const OTHER = { email: 'rls-store-other@example.com', password: PASSWORD };
+/**
+ * A third account, added with sharing.
+ *
+ * Without it, "a shared document's bytes are reachable" would be tested only by
+ * somebody who is allowed to reach them, and the widening could have been
+ * role-blind without a single test noticing. A Guest is the account that proves
+ * `can_read_records` is still an allow-list on the storage path too.
+ */
+const GUEST = { email: 'rls-store-guest@example.com', password: PASSWORD };
 
 const BUCKET = 'family-files';
 
@@ -90,6 +120,7 @@ const PIXEL = Uint8Array.from([
 describeRls('document storage', () => {
   let author: SupabaseClient;
   let other: SupabaseClient;
+  let guest: SupabaseClient;
   let authorId: string;
   let familyId: string;
   let documentId: string;
@@ -136,15 +167,32 @@ describeRls('document storage', () => {
     return path as string;
   }
 
+  /**
+   * What an author does when they decide the household should see it.
+   *
+   * Written as a plain UPDATE rather than through the service, for the same
+   * reason every other write in this suite is: the policy is the subject, and a
+   * service call would put a layer between the test and the thing being tested.
+   */
+  async function share(docId = documentId): Promise<void> {
+    const { error } = await author
+      .from('documents')
+      .update({ visibility: 'family' })
+      .eq('id', docId);
+    if (error) throw error;
+  }
+
   beforeAll(async () => {
     author = freshClient();
     other = freshClient();
+    guest = freshClient();
     authorId = await signInOrSignUp(author, AUTHOR);
     await signInOrSignUp(other, OTHER);
+    await signInOrSignUp(guest, GUEST);
   });
 
   beforeEach(async () => {
-    for (const client of [author, other]) await leaveEverything(client);
+    for (const client of [author, other, guest]) await leaveEverything(client);
 
     const { data: family, error } = await author.rpc('create_family', { family_name: 'The Vault' });
     if (error) throw error;
@@ -160,11 +208,21 @@ describeRls('document storage', () => {
     });
     if (joined.error) throw joined.error;
 
+    const { data: guestInvite, error: guestInviteError } = await author.rpc('create_invitation', {
+      target_family: familyId,
+      invited_role: 'guest',
+    });
+    if (guestInviteError) throw guestInviteError;
+    const guestJoined = await guest.rpc('redeem_invitation', {
+      invitation_code: (guestInvite as { code: string }).code,
+    });
+    if (guestJoined.error) throw guestJoined.error;
+
     documentId = await fileDocument(author, authorId, 'Passport');
   });
 
   afterAll(async () => {
-    for (const client of [author, other]) await leaveEverything(client);
+    for (const client of [author, other, guest]) await leaveEverything(client);
   });
 
   // -------------------------------------------------------------------------
@@ -257,7 +315,7 @@ describeRls('document storage', () => {
       expect(error).not.toBeNull();
     });
 
-    it('stops another member reading the object', async () => {
+    it('stops another member reading the object of a private document', async () => {
       const path = await attachAFile();
 
       const { error } = await other.storage.from(BUCKET).download(path);
@@ -265,7 +323,7 @@ describeRls('document storage', () => {
       expect(error).not.toBeNull();
     });
 
-    it('stops another member listing the family prefix', async () => {
+    it('stops another member listing the prefix of a private document', async () => {
       await attachAFile();
 
       const { data } = await other.storage.from(BUCKET).list(`${familyId}/${documentId}`);
@@ -361,7 +419,7 @@ describeRls('document storage', () => {
       expect(error).not.toBeNull();
     });
 
-    it('hides another member\'s file rows', async () => {
+    it('hides the file rows of a private document from another member', async () => {
       await attachAFile();
 
       const { data } = await other.from('document_files').select('id').eq('document_id', documentId);
@@ -430,7 +488,7 @@ describeRls('document storage', () => {
       expect(response.status).toBe(200);
     });
 
-    it('stops another member minting one', async () => {
+    it('stops another member minting one for a private document', async () => {
       // **The guard this feature introduces.** createSignedUrl goes through the
       // storage SELECT policy, so a member who cannot read the object cannot
       // mint a link to it either — otherwise the URL would be a way around the
@@ -462,6 +520,137 @@ describeRls('document storage', () => {
         .createSignedUrl(`${familyId}/${documentId}/never-uploaded.jpg`, 300);
 
       expect(error ?? data === null).toBeTruthy();
+    });
+  });
+
+  /**
+   * 20260813090000 — the bytes follow the row, and only the read half does.
+   *
+   * The hole this closes is `docs/15` §9.1's warning read backwards. §9.1 worried
+   * about an invisible row whose file stayed reachable; after sharing, the risk was
+   * a *visible* row whose file did not — a shared document that rendered its
+   * attachment and then refused to open it.
+   *
+   * The fix could have been one line — widen `owns_document_object` — and that
+   * would have been wrong, because the same function guards INSERT and DELETE. So
+   * there are two predicates now, and the tests below are how you can tell they
+   * are two: everything in the first group changed, and nothing in the second did.
+   */
+  describe('sharing lets the bytes follow the row', () => {
+    it('lets another member download the object of a shared document', async () => {
+      const path = await attachAFile();
+      await share();
+
+      const { error } = await other.storage.from(BUCKET).download(path);
+
+      expect(error).toBeNull();
+    });
+
+    it('lets another member list the prefix of a shared document', async () => {
+      await attachAFile();
+      await share();
+
+      const { data } = await other.storage.from(BUCKET).list(`${familyId}/${documentId}`);
+
+      expect((data ?? []).length).toBe(1);
+    });
+
+    it('lets another member mint a signed URL for a shared document, and it fetches', async () => {
+      // The whole point of minting through the policy rather than around it:
+      // nothing in the service layer learned about sharing, and this works.
+      // Authorisation is inherited, which is what PR-14b built it for.
+      const path = await attachAFile();
+      await share();
+
+      const { data, error } = await other.storage.from(BUCKET).createSignedUrl(path, 300);
+
+      expect(error).toBeNull();
+      const response = await fetch(data!.signedUrl);
+      expect(response.status).toBe(200);
+    });
+
+    it('shows another member the file rows of a shared document', async () => {
+      const path = await attachAFile();
+      await share();
+
+      const { data } = await other
+        .from('document_files')
+        .select('provider_file_id')
+        .eq('document_id', documentId);
+
+      expect(data).toEqual([{ provider_file_id: path }]);
+    });
+
+    it('refuses a guest the bytes of a shared document', async () => {
+      // **The test that proves the widening is not role-blind.** The storage
+      // predicate calls the same resolver as the row, so `'family'` still
+      // delegates to `can_read_records`, and a Guest is outside that allow-list.
+      // A widening written as `has_family_access` would pass every other test in
+      // this block and fail only this one.
+      const path = await attachAFile();
+      await share();
+
+      const download = await guest.storage.from(BUCKET).download(path);
+      const minted = await guest.storage.from(BUCKET).createSignedUrl(path, 300);
+
+      expect(download.error).not.toBeNull();
+      expect(minted.error ?? minted.data === null).toBeTruthy();
+    });
+
+    it('takes the bytes back when the author withdraws the share', async () => {
+      // Both halves in one test on purpose: proving it opened is only half a
+      // guarantee if nothing proves it closes again.
+      const path = await attachAFile();
+      await share();
+      expect((await other.storage.from(BUCKET).download(path)).error).toBeNull();
+
+      const { error } = await author
+        .from('documents')
+        .update({ visibility: 'private' })
+        .eq('id', documentId);
+      expect(error).toBeNull();
+
+      expect((await other.storage.from(BUCKET).download(path)).error).not.toBeNull();
+    });
+
+    it('still stops another member uploading into a shared document', async () => {
+      // Reading widened; writing did not. This is `owns_document_object` still
+      // doing its job on the INSERT policy, and the reason the predicate had to
+      // be split rather than widened.
+      const { data: path } = await allocate(author, documentId);
+      await share();
+
+      const { error } = await upload(other, path as string);
+
+      expect(error).not.toBeNull();
+    });
+
+    it('still stops another member removing the object of a shared document', async () => {
+      const path = await attachAFile();
+      await share();
+
+      await other.storage.from(BUCKET).remove([path]);
+
+      // From the author's session — a remove matching no visible object does not
+      // necessarily error, so its absence proves nothing.
+      expect((await author.storage.from(BUCKET).download(path)).error).toBeNull();
+    });
+
+    it('still stops another member detaching the file row of a shared document', async () => {
+      // The row *and* the object, checked separately. PR-14a shipped a bug where
+      // one went and the other stayed, and 21 tests missed it because not one
+      // re-listed the rows.
+      const path = await attachAFile();
+      await share();
+
+      await other.from('document_files').delete().eq('document_id', documentId);
+
+      const { data } = await author
+        .from('document_files')
+        .select('provider_file_id')
+        .eq('document_id', documentId);
+      expect(data).toEqual([{ provider_file_id: path }]);
+      expect((await author.storage.from(BUCKET).download(path)).error).toBeNull();
     });
   });
 

@@ -21,6 +21,7 @@ import { TAB_DOMAINS } from '../../../../src/navigation/domains';
 import { useAuth } from '../../../../src/providers/AuthProvider';
 import { useFamily } from '../../../../src/providers/FamilyProvider';
 import {
+  AI_PROCESSING_LABELS,
   CATEGORY_HINTS,
   CATEGORY_LABELS,
   DOCUMENT_CATEGORIES,
@@ -312,10 +313,11 @@ function DocumentCard({
         </Text>
 
         {/*
-          Filed-by reads "You" for every document until PR-15 ships sharing, and
-          is built now so the card does not change shape once it stops doing so.
-          The "Private" badge that used to sit here is gone: every document is
-          private, and a badge that is always on says nothing.
+          Filed-by read "You" for every document until PR-15 shipped sharing, and
+          was built then so the card would not change shape once it stopped doing
+          so. It does not: `describeDocumentAuthor` already resolves other
+          people's names, and this line is the only thing distinguishing your
+          library from the household's.
         */}
         <Text style={styles.cardMeta}>
           Filed by {describeDocumentAuthor(document, people, viewerUserId)} ·{' '}
@@ -323,10 +325,32 @@ function DocumentCard({
         </Text>
 
         <View style={styles.badges}>
+          {/*
+            **The badge PR-11 removed, back for the opposite reason.** A "Private"
+            badge was dropped because every document was private and a badge that
+            is always on says nothing. Now the two states both exist, and the one
+            worth marking is the exception rather than the default: this is how an
+            author sees at a glance which of their documents they have published.
+            Marking `private` instead would put a badge on almost every card and
+            leave the interesting one unlabelled.
+          */}
+          {document.visibility === 'family' ? (
+            <View style={styles.badge}>
+              <Ionicons name="people-outline" size={12} color={theme.colors.textMuted} />
+              <Text style={styles.badgeText}>Shared</Text>
+            </View>
+          ) : null}
+
+          {/*
+            The wording comes from the service rather than being typed here, so
+            the card and the detail screen cannot come to describe the same flag
+            differently. Only the `allowed` case gets a badge, on the same
+            argument as "Shared" above: mark the exception, not the default.
+          */}
           {document.aiProcessing === 'allowed' ? (
             <View style={styles.badge}>
               <Ionicons name="sparkles-outline" size={12} color={theme.colors.textMuted} />
-              <Text style={styles.badgeText}>AI may read</Text>
+              <Text style={styles.badgeText}>{AI_PROCESSING_LABELS.allowed}</Text>
             </View>
           ) : null}
         </View>
