@@ -2,21 +2,32 @@
 
 **Project:** Family Knowledge Vault
 
-**Version:** 1.2
+**Version:** 1.3
 
 **Status:** Decided 2026-08-04, **implemented in PR-9a (2026-08-05) and PR-9b (2026-08-06).**
 Authoritative for every phase from here onward.
 
-Two rounds of corrections, each found by building the thing the document described, each marked in
+Three rounds of corrections, each found by building the thing the document described, each marked in
 place rather than silently rewritten:
 
 - **v1.1, PR-9a** — the invitation rank cap (§4.2), the absence of a rank check in
   `set_family_role` (§7.1), and the `has_family_access` gate on `can_see_record` (§8.3).
 - **v1.2, PR-9b** — the rank rule on removal (§4.2) and transfer not being one locked function
   (§7.1 path 5).
+- **v1.3, PR-15a (2026-08-13)** — sharing shipped. §8.4 gains the mechanism, §8.5 records where
+  `documents` deliberately diverges from the frozen default, §9.1 gains a **third** amendment
+  splitting the storage read predicate from the write one, and §10's per-record-ACL row is
+  reconciled with what actually landed.
 
-Three of the five were the *same mistake*: assuming a single `role_rank` comparison expresses an
+Three of the first five were the *same mistake*: assuming a single `role_rank` comparison expresses an
 authorisation rule. It does not, and §5.2 already said so.
+
+**v1.3's correction is a different shape and worth naming separately.** Nothing in the model was
+wrong; a *test suite* was. Four storage tests asserted "another member of the same family cannot
+reach these bytes" when the requirement was "only somebody who can read the row can reach its
+bytes" — two sentences that agreed exactly while every document was author-only. A suite cannot
+tell which of them it is defending while they agree, which is the argument for naming the condition
+a test depends on in the test's own name.
 
 ---
 
@@ -470,11 +481,71 @@ using (public.can_see_record(family_id, visibility, member_id, created_by)
 > record"* are different questions, and a column answering both is a privilege escalation waiting for
 > someone to notice. Sharing is designed properly in PR-15.
 
+> **Amended 2026-08-13 — PR-15a shipped sharing, and the design is one sentence.**
+>
+> **Reading widens. Writing never does.**
+>
+> `visibility` gets a control (`Who can see it`, on the document detail screen) offering the two
+> values this section already defined. `private` keeps every guarantee above, unchanged. `family`
+> routes through the branch PR-9a wrote and has been waiting since: `can_read_records(target_family)`,
+> which is an allow-list of owner, admin and member — **so a Guest still reads nothing, and no policy
+> had to say so.**
+>
+> **What changed in the database is almost nothing, and that is the evidence §8.1 was right.** No
+> policy on `documents`, `document_files` or `document_members` was edited. `can_see_record` was not
+> touched, so §11's 58-assertion fixture stayed green throughout. Migration `20260813090000` contains
+> one new function and one replaced policy, both on `storage.objects` — see §9.1's third amendment.
+>
+> **Three things were deliberately *not* done**, each of which would have re-opened the hole above:
+>
+> - **The subject position stays `null`.** The `20260810090000` header speculated that "PR-15 restores
+>   it here by passing `member_id` again". It does not, and should not: read-granting through a
+>   labelling field is the same conflation of *about* and *may-read*, just with a smaller blast radius
+>   now that writes are separately gated. "Belongs to" grants nothing, and the screen says so under
+>   the control.
+> - **Write access was not widened alongside read.** UPDATE and DELETE still gate on
+>   `created_by = auth.uid()`. Someone a document is shared *with* may open it and may not rename,
+>   re-file, archive, delete, publish, un-publish, attach to or detach from it. Ten call sites of
+>   `canWriteRecords(role)` in the documents screens had to become authorship checks for the UI to
+>   match — none of which a typecheck or the 655 tests would have caught, because sharing made a
+>   previously impossible state reachable (PR-9b's lesson, hit again).
+> - **No third visibility value, and no shares table.** §10 stays as written: per-record ACLs are
+>   Phase 10. There is still no user story the two-value model fails, and §8.1 keeps the cost of
+>   adding one at a single function body.
+>
+> **The reversibility claim in the bullets above is now load-bearing rather than theoretical.** An
+> author setting a document back to `private` withdraws the row, its file rows, its people links and
+> its bytes in the same instant, because all four resolve through this one function. There is an RLS
+> test asserting exactly that, in both directions, rather than four tests that happen to agree today.
+
 ## 8.5 Defaults
 
 **`family` everywhere in v1, including Medical.** "Mum's medications" is exactly what a household
 needs at 2am, and defaulting Medical to private would make the module useless on the day it ships.
 The column lets Phase 5 revisit the *default* per table with no change to the model.
+
+> **Amended 2026-08-13 — `documents` diverges, by product decision rather than by drift.**
+>
+> **A document defaults to `private`.** `20260810090000` first set that default as a stopgap: sharing
+> was undesigned, and a `family` default would have published documents through a door nobody had
+> built yet. PR-15a built the door and the default did **not** move back, which makes it a decision
+> rather than a leftover, and it is recorded here so the next reader does not "fix" it.
+>
+> The reasoning, in the order it carries weight:
+>
+> - **A document is the most sensitive thing this product holds.** The six categories are passports,
+>   medical reports, bank statements, deeds, certificates and wills. The failure mode of a `private`
+>   default is a document nobody else found; of a `family` default, a document shared wider than its
+>   author realised. Only the first is recoverable by noticing.
+> - **`docs/07` §76 already says it**: *"Every request should assume that data is private unless
+>   explicitly shared."* The paragraph above is about a *default*, and the two can coexist — but where
+>   they pull in opposite directions on the most sensitive table, the system-design principle wins.
+> - **Opt-in makes the act legible.** Sharing that requires a tap is sharing the author knows about.
+>   `VISIBILITY_LABELS` puts "Only me" first for the same reason.
+>
+> **This does not weaken the paragraph above for Phase 5.** Medical's default is still open and the
+> 2am argument still applies to it; what this amendment settles is `documents`, not the model. The
+> column continuing to allow a per-table default is exactly what makes both answers possible.
 
 ---
 
@@ -528,6 +599,42 @@ expensive.
 > never sees when a whole family is deleted. It clears metadata, not the backing bytes; those wait
 > for Phase 12's Storage Management, which is a quota cost rather than a privacy one.
 
+> **Amended a third time, 2026-08-13 — one predicate had to become two.**
+>
+> The sentence at the top of this section is a warning about an invisible row whose file stays
+> reachable. **PR-15a arrived at it from the opposite side**: once an author can share a document,
+> `owns_document_object`'s `created_by = auth.uid()` produces a *visible* row whose file is
+> unreachable — a shared document that lists its attachment and then refuses to open it. Same
+> disagreement between the row and the bytes, mirrored.
+>
+> The obvious repair is to widen `owns_document_object` by one clause, and it is wrong: **that
+> function guards all three storage policies.** Widening it would let anybody a document was shared
+> with upload into it and delete from it. Reading and writing stopped having the same answer, so one
+> function could no longer express both.
+>
+> `20260813090000` adds **`public.can_read_document_object(name)`** — the same two-segment shape,
+> with `can_see_record(family_id, visibility, null, created_by)` where the author check used to be —
+> and points **only the SELECT policy** at it. INSERT and DELETE keep `owns_document_object`
+> unchanged. Segment 1 still carries the tenant and is still checked, so this section's pin holds,
+> exactly as the 2026-08-11 amendment argued: pinning segment 1 never forbade adding conjuncts, and
+> it does not forbid replacing one either, so long as what replaces it is stricter than the tenant.
+>
+> **The naming is the durable part.** `owns_` and `can_read_` say which question each answers, so the
+> next phase cannot reach for the wrong one by accident — and `document_files`' own DELETE policy
+> agrees independently, gating on `d.created_by`, so the row and the object cannot drift apart on
+> this point even if somebody edits one of them.
+>
+> **Why the policy and not the code that mints URLs.** `createSignedUrl` goes through this SELECT
+> policy, so nothing in the service layer learned about sharing and a signed URL remains an
+> *expression* of the policy rather than a way around it. The alternative — minting only when a row
+> read succeeded — is the "promise kept by code where a policy was available" that the amendment
+> above already refused once.
+>
+> **The four predicates that must now agree**, and the reason this is written down: `documents`,
+> `document_files`, `document_members` and `storage.objects` all resolve "who may read this document"
+> through `can_see_record(…, null, created_by)`. `20260810090000` §5 named the failure mode —
+> *"the row hidden, the things hanging off it not"* — and it now runs both ways.
+
 **9.2 Any view over a record table must be `with (security_invoker = true)`** *(Phase 8)*
 Otherwise it executes as its owner and bypasses RLS **entirely**. This is the classic Supabase
 footgun and search is where it will first be reached for.
@@ -562,7 +669,7 @@ not the uploader's, since §8.3 already treats `member_id` as the subject.
 
 | Item | Where it belongs |
 |---|---|
-| Per-record ACLs — "share this with Mum and Dad specifically" | Phase 10, *Advanced Permissions*. Adds a `shared` visibility value and a `record_shares` table; §8.1 makes it one function-body edit. |
+| Per-record ACLs — "share this with Mum and Dad specifically" | **Still Phase 10**, *Advanced Permissions*. Adds a `shared` visibility value and a `record_shares` table; §8.1 makes it one function-body edit. *(Reconciled 2026-08-13: PR-15a shipped the **family-wide** half of sharing — the `'family'` value gaining a control — and deliberately left this row standing. The two-value model has not yet failed a user story, and "don't add complexity unless the requirements require it" was the explicit instruction. What PR-15a did buy is that the third option drops into a control that already exists.)* |
 | Emergency access for a non-member caregiver | Phase 10, *Emergency Mode*. Checkpoint 1 finding #2. Separate time-boxed grant table, never a role. |
 | Cross-family sharing | Still open — Checkpoint 1 finding #4. `docs/08` §22 asserts "unless explicitly shared" with no mechanism designed. Revisit when it first blocks a real use case. |
 | Custom / user-defined roles | Not planned. §2 explains why the axis is wrong for this product. |
@@ -606,6 +713,16 @@ enough on its own. If a sixth correction lands here, start at that line.
 | `.claude/current-session.md` Phase 2 checkpoint | Claims PR-9a "edits four function bodies and **zero policies**." It removes two policies (§6.1) and replaces them with a function. Nine of eleven policies are untouched; the mechanism worked, but the claim was too strong. |
 | `.claude/current-session.md` Checkpoint 1 | Finding #1 (privacy within the family) → answered by §8. Finding #3 (no permission matrix) → closed by this document. |
 | `docs/14-pr-execution-plan.md` §7 | Phase 2 is five PRs, not four; PR-8 is *Family Relationships*, not *Family Tree*; PR-9 is split into 9a and 9b. See §7.1 of that document. |
+
+**Added 2026-08-13, while building PR-15a.** Three genuine inconsistencies were found in the
+requirement trace for sharing. They are recorded rather than quietly patched, because each is a
+question about intent that the owning document should answer:
+
+| Document | The inconsistency |
+|---|---|
+| `docs/03-product-requirements.md` **FR-014** | Lists six document actions — Preview, Download, Rename, Move, Archive, Delete — and **"Share" is not among them.** So the functional requirement PR-15 satisfies is not FR-014; the trace runs through **UR-014** (*"securely share documents with authorized family members"*) and **US-007**. FR-014 either wants a seventh action or wants a note saying sharing is a property of the record rather than an action on it. The second is the truer description of what shipped. |
+| `docs/05-user-stories.md` **US-007** | The actor is *"As a Family Owner"*. Under §8.4 an Owner cannot read another member's document at all, let alone share it — **only the author can share.** The story's actor is wrong for the model, and it is the model that is load-bearing. Suggested rewrite: *"As the person who filed a document."* |
+| **§9.6 of this document** | Says derived text *"inherits the **subject's** visibility, not the uploader's, since §8.3 already treats `member_id` as the subject."* **Stale for `documents`**, where the subject position has been `null` since `20260810090000` and stays `null` after PR-15a. For documents, derived content inherits the *author's* reach. Phase 9 must read this alongside §8.4's amendments, and Phase 4–6 tables that keep the subject branch are the ones §9.6 still describes correctly. |
 
 ---
 

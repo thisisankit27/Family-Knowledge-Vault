@@ -1822,3 +1822,202 @@ expression of it.
 **PR-15 — Sharing**, and Phase 3 is done. It is un-vacated (`docs/16` §4) and carries real weight:
 every document is currently author-only, so PR-15 decides how one reaches anybody else. Read the
 `docs/15` §8.4 amendment first — the last attempt at this shipped a privilege escalation.
+
+---
+---
+
+# PR-15a Complete — Sharing (2026-08-13)
+
+**447 CI tests, 240 RLS tests, fifteen migrations.** The first document that reaches somebody other
+than the person who filed it.
+
+## The whole model is one sentence
+
+> **Reading widens. Writing never does.**
+
+`visibility` gets a control — *Only me* / *Everyone in the family* — on the document detail screen.
+That is the feature. What makes it safe is that the two halves of "access" were already separate
+predicates, so widening one could not widen the other:
+
+| | Predicate | Changed? |
+|---|---|---|
+| SELECT on `documents`, `document_files`, `document_members` | `can_see_record(family_id, visibility, **null**, created_by)` | **no** |
+| UPDATE / DELETE on `documents` | `created_by = auth.uid() and can_write_records(family_id)` | **no** |
+| SELECT on `storage.objects` | was author-pinned → now `can_read_document_object(name)` | **yes, only this** |
+| INSERT / DELETE on `storage.objects` | `owns_document_object(name)` | **no** |
+
+**`can_see_record` was not touched**, so `permissions.rls.test.ts`'s 58 assertions and `docs/15` §11's
+fixture stayed green throughout. That is the §8.1 bet — freeze *the columns and the one function*,
+not the vocabulary — paying out in full: the 'family' branch had been sitting there since PR-9a
+waiting for something to set the column.
+
+## The one thing that was actually broken
+
+`owns_document_object` pins `created_by = auth.uid()` and **served all three storage policies**. Share
+a document and the recipient reads the row, sees the attachment listed, taps it, gets nothing — a
+*visible* row whose file is unreachable. `docs/15` §9.1's warning (*"an invisible row does not make
+its file unreachable"*) read backwards.
+
+The one-line fix — widen that function — is wrong, because widening it lets a reader upload into and
+delete from somebody else's document. **Reading and writing stopped having the same answer, so one
+function could no longer express both.** `20260813090000` adds `can_read_document_object` for SELECT
+and leaves the other two alone. The naming is the durable part: `owns_` vs `can_read_` means the next
+phase cannot reach for the wrong one by accident.
+
+## Four tests were defending an assumption, and it was caught in advance this time
+
+The storage suite asserted *"another member of the same family cannot reach these bytes."* The
+requirement was *"only somebody who can read the row can reach its bytes."* **Those two sentences
+agreed exactly while every document was author-only** — and a suite cannot tell which one it is
+defending while they agree.
+
+Renamed to say `private` out loud (reading, listing, minting a URL, seeing the file rows), each with a
+shared-document counterpart. Three others were left alone because they were always about *writing*,
+which did not widen: uploading, removing an object, detaching a row.
+
+**The two groups are a mutual negative control.** An author-only predicate fails the new tests; a
+role-blind one (`has_family_access`) fails the private ones. Both groups passing is the proof, which
+is why no schema was temporarily broken to check.
+
+Same shape as PR-14a's own lesson ("21 storage RLS tests passed while this was broken") and PR-13's
+before it. **The instruction that generalises: name the condition a test depends on, in the test's
+name.**
+
+## Ten call sites, none of which would have failed anything
+
+`canEdit = canWriteRecords(role)` appeared **10 times** across the documents screens. Every one became
+wrong the moment a member could open a document they had not filed — role says you may write records
+in general, not *this* one. It typechecks. 655 tests passed.
+
+This is PR-9b's lesson arriving for the second time: *when a PR makes a previously impossible state
+reachable, every boolean that assumed two states is now wrong, and neither the compiler nor the suite
+will say so.* Found by grepping for the old assumption, which is the only thing that finds it.
+
+Now `document.createdBy === session?.user.id && canWriteRecords(role)` — the same two parts, in the
+same order, as the UPDATE policy. `can_write_records` stays in the conjunction because it is what
+excludes a Guest and what takes the controls away from an author whose role was later reduced.
+
+**The dividend:** PR-13 had already written a read-only branch for every `Field` on the detail screen,
+so a non-author gets a working read-only document almost for free. The file viewer needed one extra
+fetch — it only had the `DocumentFile` and had to load the document to know its author. Hiding that
+Remove button is not cosmetic: under RLS a delete matching no visible row *reports success*, so a
+reader would have seen it work and the file would still be there.
+
+## Found on the device, and it was the same bug wearing different clothes
+
+All eighteen manual checks passed, and the demo still turned up a defect: **a reader saw the AI
+consent field as a disabled checkbox.**
+
+Every other field on the detail screen falls back to a statement for a non-author. This one rendered
+`<Toggle disabled={!canEdit}>` — and that `disabled` prop was **unreachable code written when only
+the author could open the screen.** Sharing made it reachable, and a disabled control is the worst of
+the three options: it asks a question, displays an answer, and refuses the interaction it just
+invited. A reader cannot tell it apart from one that is broken or still loading.
+
+So it is the *eleventh* instance of the `canWriteRecords(role)` bug, not a separate one — a branch that
+was dead while every reader was also the author. The ten I found by grepping were the ones that
+changed a *permission*; this one changed a *presentation*, which is why grep did not surface it and a
+person looking at a screen did.
+
+**The rule, and it is worth carrying into Phases 4–6 because they reuse these screens' shape:**
+
+> A setting has two audiences once records can be shared. The person who may change it gets a
+> **control**. Everybody else gets **the decision**, as a sentence. Never a disabled control.
+
+Fixed by giving the field the read-only branch the other four already had, with the wording moved into
+`AI_PROCESSING_LABELS` beside `VISIBILITY_LABELS` so the library card and the detail screen cannot
+describe the same privacy flag differently. `Toggle`'s `disabled` prop was **deleted** rather than left
+unused — an unreachable branch is where the next defect hides, and that one is a standing invitation to
+re-introduce exactly this.
+
+The labels say **"AI may not read this"**, never "cannot". The server can read the bytes; this is a
+promise kept by code, and the only thing that would make it a guarantee is Phase 11's encryption. A
+test asserts the word "cannot" never appears in either label.
+
+## A second thing the demo found, in PR-9b's code rather than this PR's
+
+Deleting a family logged **"POP_TO_TOP was not handled by any navigator"** on every success. The
+cascade itself was perfect — after the delete, `families`, `documents`, `document_files`,
+`document_members` and `storage.objects` were all at zero rows with no orphans, so
+`documents_remove_objects` fired correctly through the cascade. Purely a navigation defect, and it has
+been there since PR-9b.
+
+`app/(app)/(tabs)/family/delete.tsx` did `await refresh()` and *then* `router.dismissAll()`. `refresh()`
+sets `family` to `null`, the Family tab re-renders into join-or-create, and this modal's stack goes
+with it — so the dismissal is dispatched at a navigator that no longer exists. **Fixed by swapping the
+two lines**: dismiss while the navigator is mounted, then let the provider catch up. The delete has
+already succeeded by that point and the tab re-reads on focus anyway.
+
+**Then grepped the other four `await refresh()` sites rather than assuming**, since the class is
+"navigating after the provider drops the thing the screen depended on":
+
+| Site | Verdict |
+|---|---|
+| `family/[memberId]/index.tsx` transfer ownership | Safe — role changes, `family` survives, stack stays mounted |
+| `family/[memberId]/role.tsx` | Safe, same reason |
+| `more.tsx` leave family | Safe — nulls `family` but never navigates; it is a tab root |
+| `family/index.tsx` join / create | Safe — no navigation |
+
+So `delete.tsx` was genuinely the only one. **This is unrelated to sharing and belongs in its own
+commit** — it is PR-9b's bug, found by PR-15a's test script.
+
+## Three decisions that were deliberately not taken
+
+- **`member_id` did not go back into the resolver.** `20260810090000`'s own header speculated that
+  "PR-15 restores it here by passing `member_id` again". It should not: read-granting through a
+  labelling field is the same *about* / *may-read* conflation, just with a smaller blast radius now
+  that writes are separately gated. The subject position is still `null`.
+- **No third visibility value and no shares table.** Per-record ACLs stay in Phase 10 (`docs/15` §10),
+  re-argued rather than inherited: no story has failed the two-value model, and §8.1 keeps it a
+  one-function edit. The picker renders `DOCUMENT_VISIBILITIES`, so a third option needs no UI work.
+- **`private` stayed the default**, which promotes it from PR-13 stopgap to product decision — and
+  therefore into `docs/15` §8.5 as a documents-specific divergence from the frozen `family` default.
+  Documents are the most sensitive table this product has, and `docs/07` §76 already said *"assume
+  data is private unless explicitly shared."*
+
+## Two small things worth keeping
+
+**`DOCUMENT_VISIBILITIES` is ordered `['private', 'family']`, and the order is load-bearing** —
+`VisibilityPicker` renders it, so the narrower option is the first chip read. Broadening access should
+not be the thing the eye lands on. Started as a weak test about defaults; became a design decision.
+
+**The "Private" badge PR-11 deleted is back as "Shared", for the opposite reason.** It was dropped
+because every document was private and a badge that is always on says nothing. Both states exist now,
+and the one worth marking is the exception — it is how an author sees at a glance which of their
+documents they have published.
+
+## Deliberate gaps
+
+- **Specific-person sharing** — Phase 10.
+- **Cross-family sharing** — still undesigned; only the within-family half was ever un-vacated.
+- **Documents are not in the activity feed.** `family_activity.action`'s check constraint has no
+  document actions, so there is no §9.5 leak to fix and adding one is its own PR. Note that sharing is
+  the point at which a feed *would* start needing visibility inheritance.
+- **`documents.deleted_at`** still set by nothing; delete stays hard, archived-only, confirmed.
+- **The filing form is still title + category only** — that is PR-15b's whole job.
+
+## Docs reconciled, and one drift found
+
+`docs/15` → v1.3 (§8.4 amendment, §8.5 divergence, §9.1 **third** amendment, §10 reconciled, §12 gains
+three flagged inconsistencies). `docs/16` → v1.3. `docs/12` and `docs/14` record what shipped.
+
+**Found while doing it:** `docs/16` §3.1 still described the storage predicate as
+`has_family_access` and still carried *"anything that mints a signed URL must read the row first"* —
+superseded by PR-14a on 08-11. That file's own amendment log had the 08-11 entry; the section it
+pointed at was never updated. Fixed, and recorded as late rather than quietly.
+
+**Flagged, not silently fixed:** FR-014 lists no Share action (the trace is UR-014 / US-007); US-007's
+actor is "Family Owner" when only the author can share; `docs/15` §9.6 says derived text inherits the
+*subject's* visibility, which is stale for documents.
+
+## Next
+
+**PR-15b — one document, one form.** Title, category, Belongs to, *Who can see it*, AI consent and
+attachments configured at filing time; the same settings editable on the detail screen. `VisibilityPicker`
+is already controlled, so it drops into the form unchanged. The honest limit to keep: **filing cannot be
+one transaction** — the storage path embeds the document id, so the row must exist before any byte
+uploads. One user-facing operation over a sequence, and **no rollback**: a failed attachment leaves the
+document and the metadata, which is the more valuable half.
+
+Then **PR-16 — the landing page**, and Phase 3 closes. It is stale by seven PRs (says 18 merged and
+463 tests; actual 25 and 687) and lists no Documents capability at all.

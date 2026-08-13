@@ -229,6 +229,23 @@ Document Sharing
 >
 > **Read `docs/15` §8.4's amendment before starting it.** The last attempt at sharing shipped an
 > escalation by answering "who is this about" and "who may read this" with one column.
+>
+> **Shipped 2026-08-13, and split in two.**
+>
+> **PR-15a — Sharing.** `visibility` gets a control: *Only me* / *Everyone in the family*. The model
+> is one sentence — **reading widens, writing never does** — and the escalation warned about above is
+> structurally impossible as a result: read goes through `can_see_record`, write stays pinned to
+> `created_by`, and the subject position is still `null`, so "Belongs to" grants nothing. No new
+> table, no new visibility value, no policy edits outside `storage.objects`.
+>
+> **PR-15b — One document, one form.** The slot's remaining budget went to a defect the sharing work
+> made obvious rather than to specific-person sharing: the settings a document has were spread across
+> two screens that each decided independently what they were, and had already drifted. Filing a
+> document now configures it — title, category, Belongs to, who can see it, AI consent and
+> attachments — and the detail screen edits the same set.
+>
+> **Specific-person sharing stays Phase 10** (`docs/15` §10). No requirement has needed it yet, and
+> §8.1 keeps it a one-function edit for whenever one does. Cross-family sharing remains undesigned.
 
 Visible Progress
 

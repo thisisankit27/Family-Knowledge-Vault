@@ -2,10 +2,11 @@
 
 **Project:** Family Knowledge Vault
 
-**Version:** 1.2
+**Version:** 1.3
 
-**Status:** Written 2026-08-06 at the close of Phase 2, and amended four times as the phase taught
-things the brief could not have known. **PR-11 through PR-14b are shipped; PR-15 is the last.**
+**Status:** Written 2026-08-06 at the close of Phase 2, and amended five times as the phase taught
+things the brief could not have known. **PR-11 through PR-15a are shipped. PR-15b — one coherent
+filing flow — is the last, and the phase closes with a landing-page update (PR-16).**
 
 Original problem statements are kept in place with their dated resolutions appended, so the reasoning
 survives alongside the answer — and where a resolution was later *reversed*, both are shown. Two were:
@@ -16,10 +17,25 @@ survives alongside the answer — and where a resolution was later *reversed*, b
 | 08-09 | **Every document became author-only** after a privilege escalation found on a device (`docs/15` §8.4). This reversed §6.1: PR-15 had been vacated because "within a family is already served by `visibility`", which stopped being true |
 | 08-11 | The `has_family_access` storage predicate in §3.1 was **unsafe** under the new model and gained an author conjunct (`docs/15` §9.1) |
 | 08-12 | §5's "PDF in a WebView" **could never have worked** — Android's WebView cannot render PDFs |
+| 08-13 | **PR-15a shipped sharing**, and PR-15's second half was re-scoped from *specific-person sharing* to *one coherent filing flow* — the settings a document has are configured where it is created, not hunted for afterwards. Specific-person sharing stays in Phase 10 (`docs/15` §10) |
 
-**The pattern worth carrying into Phase 4:** three of those four came from running the app on a real
+**The pattern worth carrying into Phase 4:** three of those five came from running the app on a real
 device, not from the 655 automated tests. Twice the tests were *asserting the wrong behaviour was
-correct*.
+correct*, and on 08-13 a fourth arrived by a different route — **four storage tests were asserting a
+condition they never named**, and stayed green while the requirement underneath them changed. Naming
+the condition in the test's own name is what would have caught it, and now does.
+
+**And one UI rule that Phases 4–6 inherit along with these screens.** PR-15a's demo passed all
+eighteen checks and still exposed a defect: a reader saw AI consent as a *disabled checkbox*. Once
+records can be shared, every setting has two audiences.
+
+> The person who may change a setting gets a **control**. Everybody else gets **the decision**, as a
+> sentence. Never a disabled control — it asks a question, shows an answer, and refuses the
+> interaction it just invited.
+
+The underlying cause is the same one that made ten `canWriteRecords(role)` call sites wrong: a branch
+written while every reader was also the author. Grep found the ten that changed a permission; only
+running the app found the one that changed a presentation.
 
 ---
 
@@ -119,6 +135,33 @@ signed URL must read the row first.**
 > an ordinary column for display. **Segment 1 is unchanged, so the `has_family_access` predicate
 > above is untouched.** Everything else in §3.1 stands.
 
+> **Amended 2026-08-11 (PR-14a) — the two paragraphs above are no longer the design, and this
+> section should have said so on the day.** The amendment log at the top of this file has carried the
+> 08-11 entry since PR-14a; §3.1 itself was never updated to match, which is precisely the drift
+> PR-14b's reconciliation pass was about. Recording it late rather than quietly.
+>
+> `has_family_access(segment 1)` is tenant-level and role-blind, and `20260810090000` made every
+> document author-only — so it would have let any family member fetch the bytes of a row they cannot
+> read. **The storage policies now also check the author on segment 2**, via
+> `public.owns_document_object(name)`.
+>
+> That kills the sentence in bold above. Confidentiality is **not** "protected by never handing out a
+> URL"; it is protected by a policy, and *"anything that mints a signed URL must read the row first"*
+> is no longer a rule anybody has to remember — `createSignedUrl` goes through the policy, so it
+> cannot mint what the caller could not read. `docs/15` §9.1's own words for the old arrangement:
+> a promise kept by code in a place where a policy was available.
+
+> **Amended 2026-08-13 (PR-15a) — one predicate became two.**
+>
+> Sharing made reading and writing different questions, so `owns_document_object` could no longer
+> answer both: widening it for shared readers would have let them upload into and delete from
+> somebody else's document. The SELECT policy now calls
+> **`public.can_read_document_object(name)`** — same two segments, `can_see_record` where the author
+> check was — and INSERT and DELETE keep `owns_document_object` unchanged.
+>
+> **Segment 1 is still the tenant and is still checked**, so §3.1's original pin holds across all
+> three amendments. What changed each time was what got added beside it. See `docs/15` §9.1.
+
 ## 3.2 Was undecided, and blocking PR-14 at the latest
 
 Nothing in the repository named any of these. They were the brief's real work:
@@ -181,7 +224,8 @@ across sessions.
 | **13 Viewer** | ~~Open a document~~ → **Document detail: rename, re-file, visibility, AI consent, archive, delete.** See the amendment below. | The over-2h budget no longer applies — it existed only for `react-native-pdf`, and §5 settled on a WebView. |
 | **14a Upload** | Bucket, `storage.objects` policies, path allocator, picker, upload with real progress | Where §3.2's decisions come due. **Split confirmed — see the amendment below.** |
 | **14b Preview** | Open an attached file; images preview in-app, PDFs open in the device's own reader; share sheet for "Download" | FR-014's last two actions. **No WebView** — see §5's correction. |
-| **15 Sharing** | **Un-vacated 2026-08-09 — sharing, properly.** Every document is now author-only, so this is the PR that decides how one reaches anybody else. | Restores `visibility` to the UI and either `member_id` or a `record_shares` table (matrix §10) to the resolver. Read the §8.4 amendment first. |
+| **15a Sharing** | ~~Un-vacated 2026-08-09~~ → **shipped 2026-08-13.** `visibility` gets a control: *Only me* / *Everyone in the family*. Read widens, write never does. | **Neither** option in the old note was taken. `member_id` stays a pure label — restoring it to the resolver is the escalation §8.4 removed — and no `record_shares` table was added, because the two-value model has not failed a story yet. One new function, one replaced policy, both on `storage.objects`. |
+| **15b One document, one form** | **Re-scoped 2026-08-13.** Title, category, Belongs to, *Who can see it*, AI consent and attachments are configured **at filing time**, and the same settings stay editable on the detail screen. | Not new capability — existing capability stopped being spread across two screens that each decided independently what a document has. They had already drifted. |
 
 Phase 4 (Memories) and Phase 5 (Medical) both explicitly reuse this phase's upload and CRUD
 patterns, so a shortcut taken here is taken three times.
@@ -223,8 +267,12 @@ The correction, in migration `20260810090000`:
 - **`member_id` is now a pure label**, renamed "Belongs to", with no permission effect whatsoever.
 - **`visibility` has no control.** The column keeps both values so PR-15 has somewhere to go, but
   nothing in the UI can publish a document before sharing has been designed.
+  *(PR-15a, 08-13: it has one now — "Who can see it", on this same screen. The default stayed
+  `private`, which makes it a decision rather than the leftover it started as. `docs/15` §8.5.)*
 - **PR-15 is un-vacated**, and is where "who can see this" gets thought through rather than falling
-  out of a subject column.
+  out of a subject column. *(Done, 08-13. Notably it did **not** fall back out of the subject column
+  either: `member_id` is still a pure label and the resolver still receives `null` there. The two
+  questions stayed separate, which was the whole point.)*
 
 The generalisable lesson, since Phases 4–6 reuse this table's shape: *"who is this record about"* and
 *"who may read this record"* are different questions. A column answering both is an escalation
@@ -330,6 +378,30 @@ feature (`docs/17` §11). Recorded as open rather than quietly filled.
 > PR-15 is un-vacated and is now where sharing gets designed. The detail screen went to PR-13
 > instead, and export is re-homed (see §4's amendment).
 
+> **Settled 2026-08-13 — PR-15a, and the 08-06 decision turned out to be half right.**
+>
+> The split above was the right *distinction* and the wrong *conclusion*. "Within a family is already
+> served by `visibility`" was true of the column and false of the product: the column allowed
+> `'family'` and nothing in the app could write it. **A capability with no interface is not shipped**
+> — this project's own rule, hit for the fifth time — and the 08-06 decision is what happens when the
+> schema is read as though it were the feature.
+>
+> What shipped:
+>
+> - **Within a family: done, at two levels.** *Only me* / *Everyone in the family*. Zero new tables,
+>   zero policy edits outside storage, `can_see_record` untouched. `docs/15` §8.1's promise — that
+>   freezing the *columns and the one function* rather than the vocabulary would make this cheap —
+>   collected in full.
+> - **Per-record ACLs: still Phase 10.** Unchanged from the 08-06 reading, and re-argued rather than
+>   inherited: no requirement yet needs "just Mum and Dad", and §8.1 keeps it a one-function edit.
+> - **Between families: still undesigned, still out of scope.** Only the within-family half was ever
+>   un-vacated. `docs/08` §22's *"unless explicitly shared"* remains an assertion with no mechanism.
+>
+> And the slot's other half was reused rather than left over: **PR-15b is the filing flow** (§4). The
+> reason is a defect of the same family as the one above — `visibility` had no control, AI consent had
+> one on only one of the two screens, and attachments could only be added after filing. Two screens
+> owned the same question and answered it differently.
+
 ## 6.2 A document may relate to *multiple* members
 
 `docs/08` §7: *"A document may relate to: Family / **Multiple Members** / Timeline Events / Medical
@@ -428,7 +500,9 @@ Run `npm ci && npm run typecheck && npm test` before pushing anything that touch
 **All settled 2026-08-06, during the storage architecture review (`docs/17`).**
 
 - [x] Decide what PR-15 "Sharing" means (§6.1) → ~~within-family only; PR-15's slot is vacated~~
-      → **reopened 2026-08-09. Every document is author-only, so PR-15 designs sharing.** See §6.1.
+      → ~~reopened 2026-08-09. Every document is author-only, so PR-15 designs sharing.~~
+      → **shipped 2026-08-13 as PR-15a: within-family, two levels, no new table. Between-families
+      remains undesigned; per-record ACLs remain Phase 10.** See §6.1.
 - [x] Decide single vs multiple members per document (§6.2) → **multiple, via a
       `document_members` join table that is explicitly *not* permission-bearing.**
 - [x] Decide archive vs soft delete (§6.3) → **separate columns: `archived_at` and `deleted_at`.**
