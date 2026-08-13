@@ -2187,3 +2187,30 @@ rename, at six a rewrite. Settle it before `memory_files` exists.
 `pkill -f "expo start"` and `pkill -f "http.server 809"` both **matched the shell command running
 them** and killed the session instead of the target. Kill by pid from `pgrep` with a bracketed
 pattern (`http[.]server`), or the pattern finds itself.
+
+## Correction, same day — Phase 3 did not reach `master` on the first attempt
+
+**PR-15b (#27) and PR-16 (#28) were raised as a stack** — #27 based on
+`pr-15a-document-sharing`, #28 based on `pr-15b-document-form` — because 15b's filing form needs the
+visibility control 15a introduced.
+
+**GitHub only re-points a stacked pull request at `master` when its base branch is *deleted* after
+merging.** The bases were not deleted. So #27 merged PR-15b into `pr-15a-document-sharing`, #28 merged
+PR-16 into `pr-15b-document-form`, all three read MERGED, and **`master` received neither**. Nothing
+was lost — `pr-16-landing-page` held all four commits, and its tree was byte-identical to
+`pr-15b-document-form` — but the phase was not actually shipped.
+
+Fixed with one pull request from `pr-16-landing-page` to `master`, carrying all four commits. That
+branch was the right source rather than `pr-15b-document-form`: identical tree, and no intra-branch
+merge commits in the history.
+
+**It also cost a number.** The landing page had just been set to 28, which was true at the moment it
+was written and false the moment a twenty-ninth pull request existed. Bumped to 29 in the same
+PR — the stats sit directly above a link to the merged list, so the figure has to be whatever that
+link returns, counting every merged pull request regardless of what it merged into.
+
+**The rule for this project: do not stack pull requests.** The convention is one PR per day into
+`master`, and it exists partly for this reason. When work genuinely depends on unmerged work, either
+wait for the base to land and branch from `master`, or retarget the child to `master` by hand *before*
+merging it. A stacked PR that says MERGED is indistinguishable from a shipped one until somebody
+checks `master`.

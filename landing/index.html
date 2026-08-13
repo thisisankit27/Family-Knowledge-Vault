@@ -216,13 +216,24 @@
           "Pull requests" is the count in the linked merged list; "tests" is
           `npm test` plus the row-level-security suite.
 
-          Updated at the close of Phase 3: 28 merged (this page's own pull
+          Updated at the close of Phase 3: 29 merged (this page's own pull
           request included, since it is merged by the time anybody reads this),
           712 tests = 472 CI + 240 row-level-security.
+
+          It says 29 rather than 28 because Phase 3 cost one extra pull request
+          to bookkeeping. PR-15b and PR-16 were raised as a stack — each based on
+          the one before it rather than on master — and GitHub only re-points a
+          stacked pull request at master when its base branch is *deleted* after
+          merging. The bases were not deleted, so both merged into each other and
+          master received neither. One more pull request carried them across.
+
+          The count is what the link below returns, which is every merged pull
+          request regardless of what it merged into. That is the number a reader
+          checking this page actually sees, and matching it is the whole job.
         -->
         <ul class="stats">
           <li>
-            <strong>28</strong>
+            <strong>29</strong>
             <span>pull requests merged</span>
           </li>
           <li>
