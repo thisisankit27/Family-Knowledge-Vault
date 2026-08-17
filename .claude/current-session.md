@@ -2396,3 +2396,81 @@ migration header once speculated PR-15 would do. Named after the condition it de
 `uploadRecordFile` refactor that `docs/18` §3.1 settled. The read/write predicate split
 (`owns_memory_object` / `can_read_memory_object`) goes in the **first** migration — documents needed
 three amendments to reach it, and that lesson is already paid for.
+
+---
+---
+
+# Architectural finding — content lifecycle across families (2026-08-17)
+
+**Raised by the product owner during PR-17, after the memories code was written. Investigated and
+documented; deliberately NOT fixed. No migration, no workaround, no change to ownership semantics,
+nothing deleted.**
+
+**Recorded in full as `docs/18-phase-4-brief.md` §13**, with a pointer from `CLAUDE.md` and
+per-PR constraints inside the PR-18, PR-19 and PR-20 plans in §9. This entry is the summary; §13 is
+the authority.
+
+## The question
+
+> Does authored content belong to the **user**, with a family being the context it is shared into —
+> or does it belong to the **family**?
+
+The schema answers "the family" today, implicitly, and nobody decided it.
+
+## Current behaviour, verified against the running database
+
+- **Leaving deletes exactly one row** — `family_users`. No content, no person row, no object.
+- **Content cannot move families.** `family_id` is `not null`, nothing changes it, and
+  `unique (id, family_id)` plus every child FK are built on the pairing.
+- **The author loses their own content immediately** — `can_see_record` opens with
+  `has_family_access`, so the `private` branch stops being reachable.
+- **`family`-visible content is frozen**: still readable by the family, attributed to the departed
+  author, and **editable and deletable by nobody**, because UPDATE/DELETE gate on `created_by`.
+- **`private` content is readable by nobody at all** — not the owner, not an admin, not the author.
+  Row and bytes both persist and both count against the 1GB ceiling.
+- **The person row survives** with `user_id` intact, so the family still lists them and records may
+  still name them as subject.
+- **Rejoining silently restores everything**, private content included.
+- **`redeem_invitation` refuses a second family; `create_family` does not.** A user already in
+  Family A can create Family B, hold `family_users` rows in both, and never see Family B —
+  `listMyFamilies` orders by `created_at asc` and `FamilyProvider` takes `families[0]`, the oldest.
+  This is reachable today.
+
+## The problem
+
+Content is bound to a family for life; people are not. To move families you must abandon everything
+you authored — no export, no transfer, no copy. Private content becomes an invisible tombstone;
+shared content becomes an uncorrectable record. Deleting the family destroys the departed author's
+content with no notice. **And the leave dialog currently says *"nothing you added is deleted — someone
+still in it can invite you back"***, which is true but implies a reversibility that depends on
+somebody choosing to invite you, and says nothing about private content becoming unreadable by
+everyone.
+
+Not corruption. An unmade decision currently being made by default.
+
+## What is decided, and what is not
+
+**Decided:** nothing. **Required:** a decision before Phase 5 begins, because `docs/14` §7 says
+Medical *"reuses the Documents CRUD pattern almost directly"* and will copy whatever this turns out
+to be. The natural slot is an end-of-Phase-4 architecture review in the shape of `docs/17`.
+
+**It must be solved once across all six content domains** — Documents, Memories, Photos, Voice
+Memories, Albums, and Medical next — not per domain.
+
+## The one piece of good news
+
+`created_by` is already immutable, pinned by trigger on every record table, and already the only
+thing the `private` branch consults. **Any user-ownership model is built on it, and it is already
+correct.** What is missing is a distinction, not a column: `family_id` currently means both *which
+tenant stores this* and *which family it is shared with* — the same conflation `20260810090000`
+closed for `member_id`, one level up.
+
+## What PR-18/19/20 must not cement (docs/18 §13.6)
+
+- No second place deriving "who may read this" from family membership — everything keeps resolving
+  through `can_see_record`, so the eventual change is one function body.
+- **`provider_file_id` stays opaque.** Nothing outside the allocator parses it, no client builds one.
+  It is the escape hatch that lets a future model re-point rows without moving bytes.
+- Nothing destructive on membership change; nothing cascading on `family_users`.
+- `created_by` stays immutable and non-optional.
+- Do not build on `FamilyProvider`'s `families[0]`.

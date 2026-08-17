@@ -7,7 +7,7 @@ A digital home that preserves everything a family knows, owns, celebrates, and w
 - **`docs/15-permission-matrix.md`** — roles, the record spine, and `can_see_record`. Authoritative on permissions and visibility for every phase. It ships as a test fixture, so it cannot silently rot.
 - **`docs/16-phase-3-brief.md`** — what Phase 3 decided and what it cost. Scope-closed.
 - **`docs/17-storage-architecture-review.md`** — authoritative on storage. Declines bring-your-own-storage for Phase 3.
-- **`docs/18-phase-4-brief.md`** — Phase 4 (Memories), and the four decisions settled before PR-17.
+- **`docs/18-phase-4-brief.md`** — Phase 4 (Memories), and the four decisions settled before PR-17. **Its §13 records an open architectural question — does authored content belong to the user or to the family? — that must be decided at the end of Phase 4, before Phase 5 copies the current answer. §13.6 lists what PR-18/19/20 must not cement. Read it before writing any migration in Phase 4 or 5.**
 
 `docs/09-api-design.md` is **superseded** — it describes a REST API for a system with no server. Everything else in `docs/01`–`docs/13` is the reasoning behind the plan, and predates implementation.
 

@@ -565,6 +565,11 @@ trustworthy at exactly the moment something went wrong."*
 
 **Cut line.** The full-screen viewer. A grid that uploads and shares out is the honest minimum.
 
+**Lifecycle constraint (§13.6).** This is the PR most able to make the open ownership question
+expensive. Keep `provider_file_id` **opaque** — nothing outside the allocator may parse it, no client
+may build one — and keep every read predicate resolving through `can_see_record`. Nothing here may
+delete content or cascade on a `family_users` change.
+
 ## PR-19 — Voice Memories
 
 **Purpose.** Record a voice note into a memory, and play it back.
@@ -590,6 +595,11 @@ discard.
 
 **Cut line.** Playback progress. Play/pause alone is honest.
 
+**Lifecycle constraint (§13.6).** A voice memory is the content most obviously *authored by a person*
+rather than owned by a household — a grandparent's recorded story is the example `docs/01` leads
+with. Do not let that intuition become a second ownership rule in code: it resolves through
+`can_see_record` like everything else, and the question is settled once in §13, for all domains.
+
 ## PR-20 — Albums
 
 **Purpose.** Group memories into a named collection with a cover, and browse it.
@@ -605,6 +615,11 @@ that memory's id to another member.
 A deleted cover memory falls back rather than dangling.
 
 **Cut line.** `position` and manual reordering — date order is a good default.
+
+**Lifecycle constraint (§13.6).** An album is the first thing that groups content *across* authors,
+so it is where "whose is this collection" first has no obvious answer — and it is the last PR before
+the §13.5 review. Give the album the spine and let `can_see_record` decide, exactly as memories do;
+do not invent a collection-level ownership rule ahead of the decision that governs it.
 
 ---
 
@@ -658,7 +673,155 @@ A deleted cover memory falls back rather than dangling.
 
 ---
 
-# 13. Next Document
+# 13. Content lifecycle across families — an open architectural question
+
+**Raised 2026-08-17, during PR-17, by the product owner. Not solved here, and deliberately not
+patched. This section exists so the remaining Phase 4 PRs do not cement an assumption that makes the
+eventual answer more expensive.**
+
+> **The question, in one line:** *does authored content belong to the **user**, with a family being
+> the context it is shared into — or does it belong to the **family**?*
+>
+> The schema currently answers "the family", implicitly and without anybody having decided it.
+
+## 13.1 What the implementation does today — verified, not inferred
+
+Every statement below was checked against the running database and the migrations, not read off an
+earlier document.
+
+**Leaving a family deletes exactly one row.** `leave_family` and `remove_family_access` both end in
+`delete from public.family_users`. Nothing else is touched — no content, no person row, no object.
+
+**Content stays with the family, permanently.** `documents.family_id` and `memories.family_id` are
+`not null` and there is no operation anywhere that changes them. The composite key
+`unique (id, family_id)` and every child FK are built on that pairing, so a record cannot move
+families even in principle without rewriting its children.
+
+**The author loses access to their own content immediately.** `can_see_record` opens with
+`has_family_access(target_family)`, so the `private` branch's `record_author = auth.uid()` stops
+being reachable the moment the `family_users` row goes. This is correct and deliberate (`docs/15`
+§8.3) — but its consequence at the *lifecycle* level was never examined.
+
+**So content splits two ways when an author leaves:**
+
+| Visibility | What happens |
+|---|---|
+| `family` | Stays readable by everyone still in the family, still attributed to the departed author. **Nobody can edit or delete it** — UPDATE and DELETE gate on `created_by = auth.uid()`, and that person no longer has access. It is frozen, permanently, short of deleting the whole family. |
+| `private` | **Readable by nobody at all.** Not the owner, not an admin, not the author. The row exists, the bytes exist, both count against the family's storage, and no interface in the product can reach either. |
+
+**The person row survives, still linked to the account.** `family_members.user_id` is untouched by
+either exit path, so the family still lists the departed person, and records may still name them as
+`member_id`. Only `auth.users` deletion clears it, and that is `on delete set null`.
+
+**Rejoining silently restores everything**, including private content: `ensure_person_for_access`
+matches the existing person row by `user_id` rather than creating a second one, `has_family_access`
+becomes true again, and every policy resolves as it did before. Nothing tells anybody this happened.
+
+**A user may belong to only one family — but only on one of the two paths.**
+`redeem_invitation` refuses with *"Already in a family"*, and its own comment calls this *"a product
+rule, not a data constraint… there is no switcher UI, so a second family would be joined and then
+invisible."* **`create_family` carries no such guard.**
+
+**That last asymmetry is the sharpest edge, and it is reachable today.** A user already in Family A
+can create Family B. They then hold `family_users` rows in both. `listMyFamilies` orders by
+`created_at ascending` and `FamilyProvider` takes `families[0]`, so the app shows them **the oldest
+family** — Family A. Family B exists, they are its owner, and there is no route to it. Creating a
+family while in one is a silent no-op from the user's point of view.
+
+## 13.2 The observed problem
+
+Content is bound to a family for life, while people are not. The two lifecycles were designed
+separately and never reconciled.
+
+Concretely:
+
+1. **To move families you must abandon everything you wrote.** Joining another family requires
+   leaving the first, and leaving strands your authored content behind with no export, no transfer
+   and no copy.
+2. **Private content becomes unreachable rather than resolved.** It is neither deleted nor
+   retrievable — an invisible tombstone consuming quota against a 1GB ceiling.
+3. **Family-visible content becomes uneditable rather than reassigned.** The family keeps a record it
+   can read, cannot correct, and cannot remove.
+4. **The leave dialog is currently inaccurate.** It says *"nothing you added is deleted — someone
+   still in it can invite you back."* Both halves are true; together they imply a reversibility that
+   only holds if somebody does invite you back. It says nothing about private content becoming
+   unreadable by every human being alive, which is the part a person would want to know **before**
+   tapping Leave.
+5. **Deleting the family destroys the departed author's content** with no notice to them, via the
+   `family_id` cascade — including content they can no longer see to rescue.
+
+None of this is data corruption, and nothing is at risk right now. It is an unmade decision that is
+currently being made by default.
+
+## 13.3 The questions the eventual design must answer
+
+Recorded verbatim from the product owner so a later session cannot narrow them:
+
+- Who owns authored content?
+- What happens to private content when its author leaves a family?
+- What happens to content shared with the family?
+- Can shared content remain with the old family after the author leaves?
+- What happens when the author joins or creates another family?
+- Can the same underlying content be associated with another family without re-uploading it?
+- What should the user be asked during the leave-family flow?
+- What happens to content when a family is deleted?
+- How should attachments and storage follow the lifecycle?
+- How should permissions behave throughout the transition?
+
+**This must be solved once, across every content domain** — Documents, Memories, Photos, Voice
+Memories and Albums — not per domain. Five separate fixes would be five separate models.
+
+## 13.4 Possible direction — not a decision
+
+The shape most consistent with what is already built, offered only to be argued with:
+
+`created_by` is already immutable, pinned by a trigger on every record table, and is already the only
+thing the `private` branch consults. **It is the anchor a user-ownership model would be built on, and
+it is already correct.** What is missing is not a column but a distinction: `family_id` currently
+means both *which tenant stores this* and *which family it is shared with*, and those are the two
+ideas that need separating — the same shape as the `member_id` conflation `20260810090000` closed,
+one level up.
+
+Whatever is chosen, it should be reached by the route this project already trusts: one function
+answering "who may see this", edited in one place.
+
+## 13.5 What is required, and when
+
+**Decision required before Phase 5 begins.** Phase 5 (Medical) adds a sixth content domain, and
+`docs/14` §7 says it *"reuses the Documents CRUD pattern almost directly"* — so it will copy whatever
+this model turns out to be. **The natural slot is a review at the end of Phase 4, in the shape of
+`docs/17`**: a written architecture review before the phase that would inherit the mistake.
+
+**Explicitly out of scope for PR-18, PR-19 and PR-20.** No migration, no workaround, no change to
+ownership semantics, and nothing deleted.
+
+## 13.6 What PR-18, PR-19 and PR-20 must not cement
+
+Each of these is cheap to honour now and expensive to undo later.
+
+- **Do not add a second place that derives "who may read this" from family membership.** Every
+  predicate must keep resolving through `can_see_record`, so that a change to the ownership model is
+  a change to one function rather than to nine policies. This is `docs/15` §8.1's whole argument, and
+  it is the single most valuable thing to protect.
+- **Do not treat the storage path as a claim of ownership.** PR-18 writes
+  `<family_id>/<record_id>/<uuid>.<ext>`, and `docs/15` §9.1 pins segment 1 as the tenant. That is
+  still the right call — but it means bytes are addressed by the family that held them at upload
+  time. If content later becomes re-associable, either the path stops matching the association or the
+  bytes move. **The escape hatch already exists and must be preserved:** `provider_file_id` is an
+  **opaque identifier, deliberately not named `storage_path`** (`docs/17` §10). Nothing outside the
+  path-allocating function may parse it, and no client may construct one. Keep it that way and a
+  future model can re-point rows without touching objects.
+- **Do not make membership changes destructive.** Nothing in these PRs should delete content, clear
+  `created_by`, or cascade on a `family_users` change. Today leaving deletes one row; keep it that
+  way, so every option stays open.
+- **Keep `created_by` immutable and never optional.** Both new tables pin it by trigger. Any user-
+  ownership model depends on it, and it is the one column that genuinely cannot be backfilled.
+- **Do not add a second "current family" notion.** `FamilyProvider`'s `families[0]` is already
+  standing on the unguarded `create_family` path described in §13.1. Do not build on it.
+
+---
+
+# 14. Next Document
 
 None planned. This document is revised whenever a Phase 4 decision above is reversed, with the
 original kept in place and the reversal dated beneath it — the convention `docs/16` established and
