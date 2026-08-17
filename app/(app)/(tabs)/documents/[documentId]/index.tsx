@@ -47,9 +47,9 @@ import { createSupabaseMemberGateway, listMembers, type Member } from '../../../
 import {
   createSupabaseStorageGateway,
   formatBytes,
-  listDocumentFiles,
-  uploadDocumentFile,
-  type DocumentFile,
+  listRecordFiles,
+  uploadRecordFile,
+  type RecordFile,
   type UploadCandidate,
 } from '../../../../../src/services/storage';
 import { canWriteRecords } from '../../../../../src/services/role';
@@ -495,7 +495,7 @@ function Title({
  * becoming "1 file, 2.4 MB" — `docs/10` §13 governs the list, not this.
  */
 function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boolean }) {
-  const [files, setFiles] = useState<DocumentFile[]>([]);
+  const [files, setFiles] = useState<RecordFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState<FilingProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -503,7 +503,7 @@ function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boo
   const gateway = () => createSupabaseStorageGateway(getSupabase(), { url: getSupabaseEnv().url });
 
   const load = useCallback(async () => {
-    const result = await listDocumentFiles(gateway(), documentId);
+    const result = await listRecordFiles(gateway(), documentId);
     if (!result.ok) {
       setError(result.message);
     } else {
@@ -546,7 +546,7 @@ function Attachments({ documentId, canEdit }: { documentId: string; canEdit: boo
 
     try {
       for (const [position, candidate] of candidates.entries()) {
-        const result = await uploadDocumentFile(
+        const result = await uploadRecordFile(
           gateway(),
           documentId,
           candidate,

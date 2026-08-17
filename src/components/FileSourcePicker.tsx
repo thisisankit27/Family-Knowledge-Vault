@@ -73,6 +73,8 @@ export function toCandidate(asset: {
 export function FileSourcePicker({
   label = 'Add a file',
   multiple,
+  quality,
+  imagesOnly,
   onPicked,
   onError,
   disabled,
@@ -92,6 +94,27 @@ export function FileSourcePicker({
    * one action behave two ways depending on the screen.
    */
   multiple?: boolean;
+  /**
+   * JPEG quality for photos taken or chosen here, 0..1.
+   *
+   * **Left undefined for documents on purpose.** A memory is a holiday
+   * photograph and survives re-encoding; a document is a passport scan whose
+   * whole job is to stay legible, and compressing one to save quota would be
+   * trading the thing for the space it takes.
+   *
+   * Memories pass a value because `docs/18` §9 makes it a requirement rather
+   * than polish: 10MB per file against a ~1GB free tier is roughly a hundred
+   * uncompressed phone photographs across every family that will ever use this.
+   */
+  quality?: number;
+  /**
+   * Hide the file browser, leaving camera and gallery.
+   *
+   * A memory takes photographs. Offering "Choose a file" would let a PDF through
+   * a picker whose result the grid cannot render, and the refusal would arrive
+   * after the choosing rather than before it.
+   */
+  imagesOnly?: boolean;
   onPicked: (candidates: UploadCandidate[]) => void;
   onError: (message: string) => void;
   disabled?: boolean;
@@ -155,10 +178,11 @@ export function FileSourcePicker({
 
     const picked =
       source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'] })
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality })
         : await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
             allowsMultipleSelection: multiple,
+            quality,
           });
 
     if (picked.canceled) return;
@@ -195,7 +219,10 @@ export function FileSourcePicker({
         [
           ['camera', 'camera-outline', 'Take a photo'],
           ['library', 'images-outline', 'Choose a photo'],
-          ['files', 'document-outline', 'Choose a file'],
+          // Three is also Android's dialog limit, which is why this list is
+          // inline rather than an Alert — see the header. Dropping one for
+          // images-only keeps it well inside that either way.
+          ...(imagesOnly ? [] : [['files', 'document-outline', 'Choose a file'] as const]),
         ] as const
       ).map(([source, icon, text]) => (
         <Pressable

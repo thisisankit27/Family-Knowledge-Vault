@@ -574,9 +574,13 @@ delete content or cascade on a `family_users` change.
 
 **Purpose.** Record a voice note into a memory, and play it back.
 
-**Database.** `memory_files.duration_seconds`; bucket `allowed_mime_types` extended with audio,
-mirrored in `ALLOWED_MIME_TYPES`. **Storage.** Nothing new — same allocator, attach RPC and
-predicates. **RLS.** No change. *That is the evidence §3.1 and §5.2 were right.*
+**Database.** ~~`memory_files.duration_seconds`;~~ **already shipped in PR-18** — the column is
+nullable and "unknown length" is an honest value, so it needed no backfill decision and cost nothing
+to include with the table. `attach_memory_file` already takes `file_duration_seconds`. What remains
+is the bucket's `allowed_mime_types` extended with `audio/mp4` and `audio/m4a`, mirrored in
+`ALLOWED_MIME_TYPES`, and `MEMORY_FILES.acceptedMimeTypes` widened from `IMAGE_MIME_TYPES` to include
+them. **Storage.** Nothing new — same allocator, attach RPC and predicates. **RLS.** No change.
+*That is the evidence §3.1 and §5.2 were right.*
 
 **App.** `npx expo install expo-audio`. `NSMicrophoneUsageDescription` and the config plugin in
 `app.json` for production builds — **Expo Go already carries the permission, so the stream demo works

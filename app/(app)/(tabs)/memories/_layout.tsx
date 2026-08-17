@@ -27,6 +27,10 @@ export default function MemoriesLayout() {
           act with a clear end, and a modal is the shape that says so. */}
       <Stack.Screen name="new" options={{ title: 'Keep a memory', presentation: 'modal' }} />
       <Stack.Screen name="[memoryId]/index" options={{ title: 'Memory' }} />
+      {/* The viewer sets its own title to the memory's name, the way the
+          documents viewer sets the file's. A generic "Photo" would say less
+          than the screen already shows. */}
+      <Stack.Screen name="[memoryId]/[fileId]" />
     </Stack>
   );
 }

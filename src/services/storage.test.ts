@@ -9,24 +9,28 @@ import {
   formatBytes,
   isAllowedMimeType,
   isPreviewable,
-  listDocumentFiles,
-  removeDocumentFile,
-  shareDocumentFile,
-  uploadDocumentFile,
+  listRecordFiles,
+  removeRecordFile,
+  shareRecordFile,
+  uploadRecordFile,
   validateFile,
-  type DocumentFile,
+  type RecordFile,
+  DOCUMENT_FILES,
+  IMAGE_MIME_TYPES,
+  MEMORY_FILES,
   type StorageGateway,
   type UploadCandidate,
 } from './storage';
 
-function documentFile(overrides: Partial<DocumentFile> = {}): DocumentFile {
+function documentFile(overrides: Partial<RecordFile> = {}): RecordFile {
   return {
     id: 'file-1',
-    documentId: 'doc-1',
+    recordId: 'doc-1',
     providerFileId: 'fam-1/doc-1/abc.jpg',
     kind: 'original',
     mimeType: 'image/jpeg',
     sizeBytes: 2_400_000,
+    durationSeconds: null,
     originalFilename: 'passport.jpg',
     createdAt: '2026-08-11T10:00:00.000Z',
     ...overrides,
@@ -45,6 +49,7 @@ function candidate(overrides: Partial<UploadCandidate> = {}): UploadCandidate {
 
 function fakeGateway(overrides: Partial<StorageGateway> = {}): StorageGateway {
   return {
+    kind: DOCUMENT_FILES,
     async allocatePath() {
       return { data: 'fam-1/doc-1/abc.jpg', error: null };
     },
@@ -164,12 +169,12 @@ describe('describeStorageError', () => {
   });
 });
 
-describe('uploadDocumentFile', () => {
+describe('uploadRecordFile', () => {
   it('refuses an invalid file without touching the gateway', async () => {
     const allocatePath = jest.fn();
     const gateway = fakeGateway({ allocatePath });
 
-    const result = await uploadDocumentFile(
+    const result = await uploadRecordFile(
       gateway,
       'doc-1',
       candidate({ mimeType: 'video/mp4' }),
@@ -199,7 +204,7 @@ describe('uploadDocumentFile', () => {
       },
     });
 
-    const result = await uploadDocumentFile(gateway, 'doc-1', candidate(), readBytes);
+    const result = await uploadRecordFile(gateway, 'doc-1', candidate(), readBytes);
 
     expect(result).toEqual({ ok: true, file: documentFile() });
     expect(calls).toEqual(['allocate', 'upload', 'attach']);
@@ -217,7 +222,7 @@ describe('uploadDocumentFile', () => {
       },
     });
 
-    await uploadDocumentFile(gateway, 'doc-1', candidate({ mimeType: 'application/pdf' }), readBytes);
+    await uploadRecordFile(gateway, 'doc-1', candidate({ mimeType: 'application/pdf' }), readBytes);
 
     expect(uploadedTo).toBe('fam-9/doc-9/server-chose-this.pdf');
   });
@@ -231,7 +236,7 @@ describe('uploadDocumentFile', () => {
       uploadObject,
     });
 
-    const result = await uploadDocumentFile(gateway, 'doc-1', candidate(), readBytes);
+    const result = await uploadRecordFile(gateway, 'doc-1', candidate(), readBytes);
 
     expect(result).toEqual({ ok: false, message: 'That document is no longer available.' });
     expect(uploadObject).not.toHaveBeenCalled();
@@ -242,7 +247,7 @@ describe('uploadDocumentFile', () => {
       throw new Error('ENOENT');
     };
 
-    const result = await uploadDocumentFile(fakeGateway(), 'doc-1', candidate(), failing);
+    const result = await uploadRecordFile(fakeGateway(), 'doc-1', candidate(), failing);
 
     expect(result).toEqual({ ok: false, message: 'That file could not be read from your device.' });
   });
@@ -256,7 +261,7 @@ describe('uploadDocumentFile', () => {
       attachFile,
     });
 
-    const result = await uploadDocumentFile(gateway, 'doc-1', candidate(), readBytes);
+    const result = await uploadRecordFile(gateway, 'doc-1', candidate(), readBytes);
 
     expect(result.ok).toBe(false);
     expect(attachFile).not.toHaveBeenCalled();
@@ -271,7 +276,7 @@ describe('uploadDocumentFile', () => {
       },
     });
 
-    const result = await uploadDocumentFile(gateway, 'doc-1', candidate(), readBytes);
+    const result = await uploadRecordFile(gateway, 'doc-1', candidate(), readBytes);
 
     expect(result).toEqual({ ok: false, message: 'The upload did not finish. Try again.' });
   });
@@ -286,13 +291,13 @@ describe('uploadDocumentFile', () => {
       },
     });
 
-    await uploadDocumentFile(gateway, 'doc-1', candidate(), readBytes, (f) => seen.push(f));
+    await uploadRecordFile(gateway, 'doc-1', candidate(), readBytes, (f) => seen.push(f));
 
     expect(seen).toEqual([0.25, 1]);
   });
 });
 
-describe('listDocumentFiles', () => {
+describe('listRecordFiles', () => {
   it('reports a refusal rather than an empty list', async () => {
     const gateway = fakeGateway({
       async listFiles() {
@@ -300,18 +305,18 @@ describe('listDocumentFiles', () => {
       },
     });
 
-    expect(await listDocumentFiles(gateway, 'doc-1')).toEqual({
+    expect(await listRecordFiles(gateway, 'doc-1')).toEqual({
       ok: false,
       message: 'You do not have permission to do that.',
     });
   });
 
   it('treats a document with no files as success', async () => {
-    expect(await listDocumentFiles(fakeGateway(), 'doc-1')).toEqual({ ok: true, files: [] });
+    expect(await listRecordFiles(fakeGateway(), 'doc-1')).toEqual({ ok: true, files: [] });
   });
 });
 
-describe('removeDocumentFile', () => {
+describe('removeRecordFile', () => {
   it('removes by the stored identifier, never by a reconstructed path', async () => {
     let removed: string | null = null;
     const gateway = fakeGateway({
@@ -321,7 +326,7 @@ describe('removeDocumentFile', () => {
       },
     });
 
-    await removeDocumentFile(gateway, documentFile());
+    await removeRecordFile(gateway, documentFile());
 
     expect(removed).toBe('fam-1/doc-1/abc.jpg');
   });
@@ -343,7 +348,7 @@ describe('removeDocumentFile', () => {
       },
     });
 
-    expect(await removeDocumentFile(gateway, documentFile())).toEqual({ ok: true });
+    expect(await removeRecordFile(gateway, documentFile())).toEqual({ ok: true });
     expect(calls).toEqual(['object', 'row']);
   });
 
@@ -356,7 +361,7 @@ describe('removeDocumentFile', () => {
       },
     });
 
-    await removeDocumentFile(gateway, documentFile());
+    await removeRecordFile(gateway, documentFile());
 
     expect(detached).toBe('file-1');
   });
@@ -372,7 +377,7 @@ describe('removeDocumentFile', () => {
       detachFile,
     });
 
-    const result = await removeDocumentFile(gateway, documentFile());
+    const result = await removeRecordFile(gateway, documentFile());
 
     expect(result.ok).toBe(false);
     expect(detachFile).not.toHaveBeenCalled();
@@ -385,7 +390,7 @@ describe('removeDocumentFile', () => {
       },
     });
 
-    expect(await removeDocumentFile(gateway, documentFile())).toEqual({
+    expect(await removeRecordFile(gateway, documentFile())).toEqual({
       ok: false,
       message: 'You do not have permission to do that.',
     });
@@ -481,7 +486,7 @@ describe('downloadFilenameFor', () => {
   });
 });
 
-describe('shareDocumentFile', () => {
+describe('shareRecordFile', () => {
   const download = async () => 'file:///cache/passport.jpg';
   const share = async () => undefined;
 
@@ -494,7 +499,7 @@ describe('shareDocumentFile', () => {
       },
     });
 
-    const result = await shareDocumentFile(
+    const result = await shareRecordFile(
       gateway,
       documentFile(),
       async (url) => {
@@ -518,7 +523,7 @@ describe('shareDocumentFile', () => {
       },
     });
 
-    const result = await shareDocumentFile(gateway, documentFile(), downloadSpy, share);
+    const result = await shareRecordFile(gateway, documentFile(), downloadSpy, share);
 
     expect(result.ok).toBe(false);
     expect(downloadSpy).not.toHaveBeenCalled();
@@ -530,7 +535,7 @@ describe('shareDocumentFile', () => {
       throw new Error('network');
     };
 
-    const result = await shareDocumentFile(gateway_(), documentFile(), failing, shareSpy);
+    const result = await shareRecordFile(gateway_(), documentFile(), failing, shareSpy);
 
     expect(result).toEqual({
       ok: false,
@@ -542,7 +547,7 @@ describe('shareDocumentFile', () => {
   it('distinguishes a failed sheet from a failed download', async () => {
     // Different messages because the remedies differ: one means try again, the
     // other means the file is already on the device and the sheet misbehaved.
-    const result = await shareDocumentFile(gateway_(), documentFile(), download, async () => {
+    const result = await shareRecordFile(gateway_(), documentFile(), download, async () => {
       throw new Error('no activity found');
     });
 
@@ -551,7 +556,7 @@ describe('shareDocumentFile', () => {
 
   it('passes the original filename to the downloader', async () => {
     let named: string | null = null;
-    await shareDocumentFile(
+    await shareRecordFile(
       gateway_(),
       documentFile(),
       async (_url, filename) => {
@@ -569,3 +574,84 @@ describe('shareDocumentFile', () => {
 function gateway_(): StorageGateway {
   return fakeGateway();
 }
+
+describe('record file kinds', () => {
+  it('sends each domain to its own RPCs, which is the whole of what differs', () => {
+    // docs/18 §3.1: per-domain tables in SQL, shared upload code in TypeScript.
+    // If this ever needs a fifth field, the abstraction has drifted from what
+    // actually varies between the two.
+    expect(DOCUMENT_FILES.allocateRpc).toBe('allocate_document_file_path');
+    expect(DOCUMENT_FILES.attachRpc).toBe('attach_document_file');
+    expect(MEMORY_FILES.allocateRpc).toBe('allocate_memory_file_path');
+    expect(MEMORY_FILES.attachRpc).toBe('attach_memory_file');
+  });
+
+  it('never lets a kind accept something the bucket would refuse', () => {
+    // A per-domain list may be narrower than the bucket and must never be wider,
+    // or the refusal arrives from storage after a whole upload instead of before it.
+    for (const kind of [DOCUMENT_FILES, MEMORY_FILES]) {
+      for (const mimeType of kind.acceptedMimeTypes) {
+        expect(isAllowedMimeType(mimeType)).toBe(true);
+      }
+    }
+  });
+
+  it('accepts a photo for a memory and refuses a PDF, which the bucket allows', () => {
+    // The narrowing that keeps the grid honest: everything in it renders.
+    expect(validateFile({ mimeType: 'image/jpeg', sizeBytes: 1000 }, MEMORY_FILES.acceptedMimeTypes)).toBeNull();
+
+    const refused = validateFile(
+      { mimeType: 'application/pdf', sizeBytes: 1000 },
+      MEMORY_FILES.acceptedMimeTypes,
+    );
+    expect(refused).not.toBeNull();
+    // And the sentence names what a memory takes, not what the bucket permits.
+    expect(refused?.message).toContain('a photo');
+    expect(refused?.message).not.toContain('PDF');
+  });
+
+  it('still accepts a PDF for a document', () => {
+    expect(
+      validateFile({ mimeType: 'application/pdf', sizeBytes: 1000 }, DOCUMENT_FILES.acceptedMimeTypes),
+    ).toBeNull();
+  });
+
+  it('defaults to the bucket allow-list when no kind is given', () => {
+    expect(validateFile({ mimeType: 'application/pdf', sizeBytes: 1000 })).toBeNull();
+  });
+
+  it('derives the image list from the bucket rather than restating it', () => {
+    expect(IMAGE_MIME_TYPES).not.toContain('application/pdf');
+    expect(IMAGE_MIME_TYPES.length).toBe(ALLOWED_MIME_TYPES.length - 1);
+  });
+
+  it('checks the kind the gateway carries, not one the caller passes separately', async () => {
+    // The kind travels with the gateway so a screen cannot pair a memory gateway
+    // with a document allow-list. This is the test that would fail if uploadRecordFile
+    // ever grew a `kind` argument of its own.
+    const memoryGateway = { ...fakeGateway(), kind: MEMORY_FILES };
+    const outcome = await uploadRecordFile(
+      memoryGateway,
+      'memory-1',
+      candidate({ mimeType: 'application/pdf', originalFilename: 'scan.pdf' }),
+      async () => new Uint8Array([1]),
+    );
+
+    expect(outcome.ok).toBe(false);
+  });
+});
+
+describe('downloadFilenameFor', () => {
+  it('prefers the name the file arrived with', () => {
+    expect(downloadFilenameFor(documentFile({ originalFilename: 'passport.jpg' }))).toBe(
+      'passport.jpg',
+    );
+  });
+
+  it('falls back to the kind\'s own noun, so a photo does not save as document.jpg', () => {
+    expect(downloadFilenameFor(documentFile({ originalFilename: null }))).toBe('document.jpg');
+    expect(downloadFilenameFor(documentFile({ originalFilename: null }), MEMORY_FILES.downloadNoun)).toBe(
+      'photo.jpg',
+    );
+  });
+});

@@ -47,6 +47,17 @@ export const ALLOWED_MIME_TYPES = [
 export type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
 
 /**
+ * The subset that is a picture.
+ *
+ * Not a second allow-list — a narrowing of the one above, so a type the bucket
+ * would refuse cannot appear here. Memories accept these and nothing else in
+ * PR-18 (see `MEMORY_FILES`).
+ */
+export const IMAGE_MIME_TYPES = ALLOWED_MIME_TYPES.filter(
+  (mimeType) => mimeType !== 'application/pdf',
+);
+
+/**
  * The extension the stored object gets.
  *
  * Derived from the MIME type, **never from the user's filename**. The path
@@ -91,16 +102,97 @@ export function isPreviewable(mimeType: string): boolean {
   return isAllowedMimeType(mimeType) && mimeType !== 'application/pdf';
 }
 
-export interface DocumentFile {
+/**
+ * A stored object, whatever kind of record it hangs off.
+ *
+ * Named `RecordFile` rather than `DocumentFile` since PR-18, because the second
+ * caller arrived and the logic turned out to be identical — see `RecordFileKind`.
+ *
+ * `recordId` is the parent's id. Which *table* that id lives in is the kind's
+ * business, not this type's, and no consumer needs to know.
+ */
+export interface RecordFile {
   id: string;
-  documentId: string;
+  recordId: string;
+  /**
+   * The provider's own identifier for the object.
+   *
+   * **Opaque. Do not parse it, do not build one, do not display it.** It happens
+   * to be a storage path today, and `docs/17` §10 named it `provider_file_id`
+   * precisely so nothing outside the database's allocator would depend on that.
+   * `docs/18` §13.6 makes it load-bearing for a second reason: if the open
+   * content-ownership question ever re-associates a record with another family,
+   * an identifier nothing parses can be re-pointed without moving bytes.
+   */
   providerFileId: string;
   kind: 'original' | 'thumbnail';
   mimeType: string;
   sizeBytes: number;
+  /** Null for a photograph. Reserved for PR-19's recordings. */
+  durationSeconds: number | null;
   originalFilename: string | null;
   createdAt: string;
 }
+
+/**
+ * What differs between one record domain's files and another's — which is only
+ * ever names.
+ *
+ * `docs/18` §3.1 settled this: per-domain tables in SQL, shared upload *code* in
+ * TypeScript. The SQL stays four small honest functions per domain, because a
+ * polymorphic `record_files` table cannot express the composite foreign key that
+ * makes a cross-tenant attachment impossible to represent, and would put a type
+ * discriminator inside an RLS policy. The upload *path* has no such excuse: it
+ * is allocate → read bytes → XHR with progress → attach, and only two RPC names
+ * change.
+ *
+ * Written when the second caller arrived, not before it — `docs/16`'s closing
+ * habit. PR-20's albums are the third; if a fourth field appears here, that is
+ * the signal the abstraction is drifting from what actually varies.
+ */
+export interface RecordFileKind {
+  /** RPC that returns a path. The only thing anywhere that builds one. */
+  allocateRpc: string;
+  /** RPC that writes the row, after verifying the object exists. */
+  attachRpc: string;
+  /** The RPC argument naming the parent record. */
+  parentParam: string;
+  /** The table holding the rows. */
+  filesTable: string;
+  /** The column in that table pointing at the parent. */
+  parentColumn: string;
+  /** What a file of this kind is called when it lands on somebody's phone. */
+  downloadNoun: string;
+  /**
+   * What this domain accepts, which may be narrower than the bucket.
+   *
+   * The bucket is the real limit and permits PDFs; a *memory* takes
+   * photographs, so a narrower list here keeps the grid honest — everything in
+   * it renders — without touching the bucket that documents also use.
+   */
+  acceptedMimeTypes: readonly string[];
+}
+
+export const DOCUMENT_FILES: RecordFileKind = {
+  allocateRpc: 'allocate_document_file_path',
+  attachRpc: 'attach_document_file',
+  parentParam: 'target_document',
+  filesTable: 'document_files',
+  parentColumn: 'document_id',
+  downloadNoun: 'document',
+  acceptedMimeTypes: ALLOWED_MIME_TYPES,
+};
+
+export const MEMORY_FILES: RecordFileKind = {
+  allocateRpc: 'allocate_memory_file_path',
+  attachRpc: 'attach_memory_file',
+  parentParam: 'target_memory',
+  filesTable: 'memory_files',
+  parentColumn: 'memory_id',
+  downloadNoun: 'photo',
+  // Images only in PR-18. PR-19 adds audio here and to the bucket together.
+  acceptedMimeTypes: IMAGE_MIME_TYPES,
+};
 
 export interface UploadCandidate {
   uri: string;
@@ -116,12 +208,19 @@ export interface UploadCandidate {
  * fails at the end has cost the user their patience and their allowance to
  * learn something knowable up front.
  */
-export function validateFile(file: {
-  mimeType: string;
-  sizeBytes: number;
-}): { message: string } | null {
-  if (!isAllowedMimeType(file.mimeType)) {
-    return { message: 'That kind of file cannot be filed yet. Use a photo or a PDF.' };
+export function validateFile(
+  file: {
+    mimeType: string;
+    sizeBytes: number;
+  },
+  accepted: readonly string[] = ALLOWED_MIME_TYPES,
+): { message: string } | null {
+  if (!isAllowedMimeType(file.mimeType) || !accepted.includes(file.mimeType)) {
+    // The sentence names what this record takes, not what the bucket permits.
+    // Telling somebody attaching a photo to a memory that they may use a PDF
+    // would be true of the bucket and false of the thing in front of them.
+    const wanted = accepted.includes('application/pdf') ? 'a photo or a PDF' : 'a photo';
+    return { message: `That kind of file cannot be added yet. Use ${wanted}.` };
   }
   if (file.sizeBytes <= 0) {
     return { message: 'That file is empty.' };
@@ -159,16 +258,24 @@ export function describeStorageError(message: string): string {
   if (normalised.includes('mime type') || normalised.includes('invalid_mime_type')) {
     return 'That kind of file cannot be filed yet. Use a photo or a PDF.';
   }
+  // Raised by both allocator and attach functions in each domain, and
+  // deliberately the same message whether the record is missing or somebody
+  // else's — "not yours" and "does not exist" are the same fact to a caller who
+  // should not learn which.
   if (normalised.includes('document not found')) {
-    // Raised by both database functions, and deliberately the same whether the
-    // document is missing or somebody else's.
     return 'That document is no longer available.';
+  }
+  if (normalised.includes('memory not found')) {
+    return 'That memory is no longer available.';
   }
   if (normalised.includes('no file was uploaded')) {
     return 'The upload did not finish. Try again.';
   }
   if (normalised.includes('does not belong to this document')) {
     return 'That file does not belong to this document.';
+  }
+  if (normalised.includes('does not belong to this memory')) {
+    return 'That file does not belong to this memory.';
   }
   if (normalised.includes('row-level security') || normalised.includes('permission denied')) {
     return 'You do not have permission to do that.';
@@ -194,8 +301,16 @@ export const SIGNED_URL_TTL_SECONDS = 300;
 
 export type UploadProgress = (fraction: number) => void;
 
+/**
+ * One gateway shape for every record domain.
+ *
+ * The kind it was built with decides which RPCs and which table it talks to, so
+ * nothing above this line mentions documents or memories.
+ */
 export interface StorageGateway {
-  allocatePath(documentId: string, extension: string): Promise<GatewayResult<string>>;
+  /** What this gateway was built for — callers read it, never mutate it. */
+  readonly kind: RecordFileKind;
+  allocatePath(recordId: string, extension: string): Promise<GatewayResult<string>>;
   uploadObject(input: {
     path: string;
     bytes: Uint8Array;
@@ -203,21 +318,19 @@ export interface StorageGateway {
     onProgress?: UploadProgress;
   }): Promise<{ error: { message: string } | null }>;
   attachFile(input: {
-    documentId: string;
+    recordId: string;
     path: string;
     mimeType: string;
     sizeBytes: number;
     originalFilename: string | null;
-  }): Promise<GatewayResult<DocumentFile>>;
-  listFiles(documentId: string): Promise<GatewayResult<DocumentFile[]>>;
+  }): Promise<GatewayResult<RecordFile>>;
+  listFiles(recordId: string): Promise<GatewayResult<RecordFile[]>>;
   removeObject(path: string): Promise<{ error: { message: string } | null }>;
   detachFile(fileId: string): Promise<{ error: { message: string } | null }>;
   createSignedUrl(path: string, expiresInSeconds: number): Promise<GatewayResult<string>>;
 }
 
-export type AttachOutcome =
-  | { ok: true; file: DocumentFile }
-  | { ok: false; message: string };
+export type AttachOutcome = { ok: true; file: RecordFile } | { ok: false; message: string };
 
 /**
  * The whole upload, as one operation the screen can await.
@@ -237,22 +350,22 @@ export type AttachOutcome =
  * would trade that for a row describing bytes that are not there, which is the
  * worse failure — the catalogue would be lying rather than merely wasteful.
  */
-export async function uploadDocumentFile(
+export async function uploadRecordFile(
   gateway: StorageGateway,
-  documentId: string,
+  recordId: string,
   candidate: UploadCandidate,
   readBytes: (uri: string) => Promise<Uint8Array>,
   onProgress?: UploadProgress,
 ): Promise<AttachOutcome> {
-  const invalid = validateFile(candidate);
+  const invalid = validateFile(candidate, gateway.kind.acceptedMimeTypes);
   if (invalid) return { ok: false, message: invalid.message };
 
   const extension = extensionFor(candidate.mimeType);
   if (!extension) {
-    return { ok: false, message: 'That kind of file cannot be filed yet. Use a photo or a PDF.' };
+    return { ok: false, message: 'That kind of file cannot be added yet.' };
   }
 
-  const allocated = await gateway.allocatePath(documentId, extension);
+  const allocated = await gateway.allocatePath(recordId, extension);
   if (allocated.error || !allocated.data) {
     return {
       ok: false,
@@ -279,7 +392,7 @@ export async function uploadDocumentFile(
   }
 
   const attached = await gateway.attachFile({
-    documentId,
+    recordId,
     path,
     mimeType: candidate.mimeType,
     sizeBytes: candidate.sizeBytes,
@@ -295,11 +408,11 @@ export async function uploadDocumentFile(
   return { ok: true, file: attached.data };
 }
 
-export async function listDocumentFiles(
+export async function listRecordFiles(
   gateway: StorageGateway,
-  documentId: string,
-): Promise<{ ok: true; files: DocumentFile[] } | { ok: false; message: string }> {
-  const { data, error } = await gateway.listFiles(documentId);
+  recordId: string,
+): Promise<{ ok: true; files: RecordFile[] } | { ok: false; message: string }> {
+  const { data, error } = await gateway.listFiles(recordId);
   if (error) return { ok: false, message: describeStorageError(error.message) };
   return { ok: true, files: data ?? [] };
 }
@@ -321,9 +434,9 @@ export async function listDocumentFiles(
  * removes rows only, so those bytes wait for Phase 12. Quota, not privacy — an
  * object whose document is gone is unreachable by anyone.
  */
-export async function removeDocumentFile(
+export async function removeRecordFile(
   gateway: StorageGateway,
-  file: DocumentFile,
+  file: RecordFile,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const removed = await gateway.removeObject(file.providerFileId);
   if (removed.error) return { ok: false, message: describeStorageError(removed.error.message) };
@@ -353,7 +466,7 @@ export async function removeDocumentFile(
  */
 export async function fileUrl(
   gateway: StorageGateway,
-  file: DocumentFile,
+  file: RecordFile,
 ): Promise<{ ok: true; url: string } | { ok: false; message: string }> {
   const { data, error } = await gateway.createSignedUrl(
     file.providerFileId,
@@ -383,9 +496,9 @@ export async function fileUrl(
  * testable without a device — the same reason `uploadDocumentFile` takes
  * `readBytes`.
  */
-export async function shareDocumentFile(
+export async function shareRecordFile(
   gateway: StorageGateway,
-  file: DocumentFile,
+  file: RecordFile,
   download: (url: string, filename: string) => Promise<string>,
   share: (localUri: string, mimeType: string) => Promise<void>,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -421,38 +534,43 @@ export async function shareDocumentFile(
  * Falls back to the document's kind plus the right extension, because "file"
  * with no extension is a file the receiving app will not know how to open.
  */
-export function downloadFilenameFor(file: DocumentFile): string {
+export function downloadFilenameFor(file: RecordFile, noun = 'document'): string {
   if (file.originalFilename) return file.originalFilename;
   const extension = extensionFor(file.mimeType) ?? 'bin';
-  return `document.${extension}`;
+  return `${noun}.${extension}`;
 }
 
-interface DocumentFileRow {
+interface RecordFileRow {
   id: string;
-  document_id: string;
   provider_file_id: string;
   kind: 'original' | 'thumbnail';
   mime_type: string;
   size_bytes: number;
+  duration_seconds: number | null;
   original_filename: string | null;
   created_at: string;
+  /** Whichever of `document_id` / `memory_id` this kind uses. */
+  [parentColumn: string]: unknown;
 }
 
-function toDocumentFile(row: DocumentFileRow): DocumentFile {
+function toRecordFile(row: RecordFileRow, parentColumn: string): RecordFile {
   return {
     id: row.id,
-    documentId: row.document_id,
+    recordId: String(row[parentColumn] ?? ''),
     providerFileId: row.provider_file_id,
     kind: row.kind,
     mimeType: row.mime_type,
     sizeBytes: Number(row.size_bytes),
+    durationSeconds: row.duration_seconds === null ? null : Number(row.duration_seconds),
     originalFilename: row.original_filename,
     createdAt: row.created_at,
   };
 }
 
-const FILE_COLUMNS =
-  'id, document_id, provider_file_id, kind, mime_type, size_bytes, original_filename, created_at';
+/** Built per kind, because the parent column is the only part that varies. */
+function fileColumns(kind: RecordFileKind): string {
+  return `id, ${kind.parentColumn}, provider_file_id, kind, mime_type, size_bytes, duration_seconds, original_filename, created_at`;
+}
 
 /**
  * Uploads through `XMLHttpRequest` rather than `supabase-js`.
@@ -469,11 +587,14 @@ const FILE_COLUMNS =
 export function createSupabaseStorageGateway(
   client: SupabaseClient,
   config: { url: string },
+  kind: RecordFileKind = DOCUMENT_FILES,
 ): StorageGateway {
   return {
-    async allocatePath(documentId, extension) {
-      const { data, error } = await client.rpc('allocate_document_file_path', {
-        target_document: documentId,
+    kind,
+
+    async allocatePath(recordId, extension) {
+      const { data, error } = await client.rpc(kind.allocateRpc, {
+        [kind.parentParam]: recordId,
         extension,
       });
       return { data: (data ?? null) as string | null, error };
@@ -517,28 +638,28 @@ export function createSupabaseStorageGateway(
       });
     },
 
-    async attachFile({ documentId, path, mimeType, sizeBytes, originalFilename }) {
-      const { data, error } = await client.rpc('attach_document_file', {
-        target_document: documentId,
+    async attachFile({ recordId, path, mimeType, sizeBytes, originalFilename }) {
+      const { data, error } = await client.rpc(kind.attachRpc, {
+        [kind.parentParam]: recordId,
         object_path: path,
         file_mime_type: mimeType,
         file_size_bytes: sizeBytes,
         file_original_name: originalFilename,
       });
 
-      const row = (data ?? null) as DocumentFileRow | null;
-      return { data: row ? toDocumentFile(row) : null, error };
+      const row = (data ?? null) as RecordFileRow | null;
+      return { data: row ? toRecordFile(row, kind.parentColumn) : null, error };
     },
 
-    async listFiles(documentId) {
+    async listFiles(recordId) {
       const { data, error } = await client
-        .from('document_files')
-        .select(FILE_COLUMNS)
-        .eq('document_id', documentId)
+        .from(kind.filesTable)
+        .select(fileColumns(kind))
+        .eq(kind.parentColumn, recordId)
         .order('created_at', { ascending: true })
-        .returns<DocumentFileRow[]>();
+        .returns<RecordFileRow[]>();
 
-      return { data: data ? data.map(toDocumentFile) : null, error };
+      return { data: data ? data.map((row) => toRecordFile(row, kind.parentColumn)) : null, error };
     },
 
     async removeObject(path) {
@@ -557,7 +678,7 @@ export function createSupabaseStorageGateway(
     },
 
     async detachFile(fileId) {
-      const { error } = await client.from('document_files').delete().eq('id', fileId);
+      const { error } = await client.from(kind.filesTable).delete().eq('id', fileId);
       return { error };
     },
   };

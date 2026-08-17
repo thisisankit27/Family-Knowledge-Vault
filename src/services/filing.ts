@@ -45,7 +45,7 @@ import {
   type FamilyDocument,
 } from './document';
 import {
-  uploadDocumentFile,
+  uploadRecordFile,
   type StorageGateway,
   type UploadCandidate,
 } from './storage';
@@ -101,7 +101,7 @@ export async function fileDocument(
   // this project is built against does not reward hammering storage with
   // concurrent uploads from a phone.
   for (const [position, candidate] of candidates.entries()) {
-    const result = await uploadDocumentFile(
+    const result = await uploadRecordFile(
       gateways.storage,
       document.id,
       candidate,
