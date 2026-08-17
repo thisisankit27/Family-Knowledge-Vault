@@ -259,6 +259,20 @@ Goal:
 
 Preserve life's important moments.
 
+> **Annotated 2026-08-17 — the PR numbers below are off by one, and the scope changed.** Kept as
+> written because this document is *"the historical record of the original vision-level sequencing"*
+> (`docs/14` §1); renumbering it would destroy the evidence of the collision.
+>
+> **PR-016 shipped as the landing-page update** that closed Phase 3, not as the Memories Module. So
+> Phase 4 is **PR-17 → PR-20**, and every number below is one higher than it reads.
+>
+> **Two of the five titles are also wrong**, settled in `docs/18-phase-4-brief.md` §3.2:
+> *Stories* is not a PR — `docs/08` §4 says *"Story is not an entity; it is a field"*, so it ships as
+> a `story` column in PR-17. *Memory Timeline* moves to **Phase 7**, where
+> `src/navigation/domains.ts` already registers `timeline` as its own domain.
+>
+> **As built:** PR-17 Memories · PR-18 Memory Photos · PR-19 Voice Memories · PR-20 Albums.
+
 ---
 
 ## PR-016

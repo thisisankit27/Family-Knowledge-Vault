@@ -2214,3 +2214,83 @@ link returns, counting every merged pull request regardless of what it merged in
 wait for the base to land and branch from `master`, or retarget the child to `master` by hand *before*
 merging it. A stacked PR that says MERGED is indistinguishable from a shipped one until somebody
 checks `master`.
+
+---
+---
+
+# Phase 4 Brief — planning only, no app code (2026-08-17)
+
+**No migrations, no branches off this into PR-17, no application changes.** A documentation pass that
+does for Phase 4 what `docs/15` did before PR-9a and `docs/16` did before PR-11 — both of which
+caught privilege escalations before they shipped, which is the entire justification.
+
+Phase 4 had **no specification anywhere**: `docs/14` gave it one table row and three sentences,
+`docs/12` gave it five bare titles. Written now: **`docs/18-phase-4-brief.md`**.
+
+## The four decisions, settled before PR-17
+
+| Question | Decided |
+|---|---|
+| Shared vs per-domain file tables — `docs/17` §13's blocking question | **Per-domain tables, shared upload *code*.** `memory_files` mirrors `document_files`; `uploadRecordFile` is parameterised by record type, as a refactor in PR-18 when the second caller actually arrives |
+| Five capabilities, four PR slots | **Stories are a field** (`docs/08` §4 already said so); **Memory Timeline moves to Phase 7**, where `domains.ts` already registers `timeline` |
+| Video | **Deferred to Phase 12**, with the 10MB cap it depends on |
+| Subject branch on private memories | **Pass `null`.** "Belongs to" grants nothing, anywhere |
+
+**Phase 4 is PR-17 Memories · PR-18 Memory Photos · PR-19 Voice Memories · PR-20 Albums.**
+
+## The roadmap was wrong about the audio package, and it mattered
+
+`docs/14` said *"Voice via Expo AV — natural fit."* It was the only occurrence of "Expo AV" in the
+repository and **nothing had ever checked it against the pinned SDK**. `expo-av` is unmaintained from
+SDK 54 and **removed in SDK 55**; this project pins `expo ~54.0.0`. Following the roadmap would have
+meant writing PR-19 against a package with a published removal date one SDK ahead.
+
+**Voice ships on `expo-audio`** — stable, *included in Expo Go* on 54 (so the stream demo needs no
+dev build), records `.m4a`/AAC on both platforms.
+
+The generalisable part: **a roadmap line naming a specific library is a claim with an expiry date**,
+and this one sat unchallenged through three phases. Phases 5–12 contain several more of the same
+shape.
+
+## Two things the recon found that no document knew
+
+- **The bucket would have rejected audio.** `family-files` declares
+  `allowed_mime_types = [image/jpeg, image/png, image/heic, image/webp, application/pdf]`. PR-19
+  needs a migration extending it, mirrored in `ALLOWED_MIME_TYPES`. Discovered by reading the
+  migration, not by trusting `docs/16` §3.2's *"Phase 4 adds audio and video"*.
+- **`album_memories` needs both sides visible.** If its SELECT resolved only through the album, a
+  member could read the memory *ids* inside a `family` album containing someone's `private` memory —
+  existence disclosure, and the same *"the row hidden, the things hanging off it not"* failure
+  `20260810090000` §5 named. This is the one genuinely new security question Phase 4 raises.
+
+## Documents reconciled in the same pass
+
+Each was flagged rather than silently patched, per `docs/16` §6's convention:
+
+| Document | What changed |
+|---|---|
+| `docs/14` §7 | Phase 4 row rewritten — numbers, scope, and the Expo AV line. Original struck through, not removed |
+| `docs/15` §4.4 | The *"author **or subject**"* row **describes no shipped record type**. Both `documents` and now `memories` pass `null`. Amended at the table, because the table is the part people quote and the amendments live sections below it |
+| `docs/15` §9.6 | *"derived text inherits the **subject's** visibility"* is now true of zero tables. The principle stands; the clause naming the column is wrong. Phase 9 must not implement it as written |
+| `docs/12` | Phase 4 annotated: PR-016 is off by one, two of five titles wrong. **Not renumbered** — it is the historical record |
+| `docs/09` | Marked **SUPERSEDED**. It describes a REST API for a system with no server |
+| `docs/08` §15 | *"One uploaded file may appear in multiple contexts"* flagged as asking for what §3.1 declined. Left standing — it is the best argument for the rejected design |
+| `CLAUDE.md` | Line 3 said the corpus was `docs/01`–`docs/14`; it never learned 15, 16 and 17 existed, let alone 18 |
+
+## Open items
+
+- **`src/navigation/domains.ts` still says `documents.arrivesIn: 'Phase 3'`.** Stale since Phase 3
+  closed. Harmless today — `arrivesIn` renders only for `MORE_DOMAINS` and in the `memories` empty
+  state — but `memories` needs the same edit when Phase 4 closes. **Deliberately not fixed here:**
+  it is app code, and this is a documentation PR.
+- **`docs/08` §15's own question is unanswered** — is it wrong, or describing a Phase 12 feature?
+- Everything in the Phase 3 open-items list is unchanged: `deleted_at` set by nothing, documents
+  absent from the activity feed, orphaned bytes awaiting Phase 12, thumbnails deferred, the 240 RLS
+  tests still not run in CI.
+
+## Next
+
+**PR-17 — Memories.** `docs/18` §12 is the pre-flight checklist. The table is the `docs/15` §8.2
+spine verbatim plus `title`, `story`, `occurred_on`, `occurred_precision`, `archived_at` and
+`ai_processing`; `visibility` defaults to **`family`**, diverging from documents on purpose and
+documented as a decision so nobody "fixes" it.

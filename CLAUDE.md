@@ -1,6 +1,15 @@
 # Family Knowledge Vault — Project Context
 
-A digital home that preserves everything a family knows, owns, celebrates, and wants to pass on. Full vision: `docs/01-vision.md`. Full planning corpus: `docs/01` through `docs/14` (read `docs/14-pr-execution-plan.md` first — it's the authoritative day-to-day execution guide; the rest is the reasoning behind it).
+A digital home that preserves everything a family knows, owns, celebrates, and wants to pass on. Full vision: `docs/01-vision.md`. Full planning corpus: `docs/01` through `docs/18`.
+
+**Read `docs/14-pr-execution-plan.md` first** — it's the authoritative day-to-day execution guide. Then the four documents written *during* building, which override the earlier corpus wherever they disagree with it (check the date):
+
+- **`docs/15-permission-matrix.md`** — roles, the record spine, and `can_see_record`. Authoritative on permissions and visibility for every phase. It ships as a test fixture, so it cannot silently rot.
+- **`docs/16-phase-3-brief.md`** — what Phase 3 decided and what it cost. Scope-closed.
+- **`docs/17-storage-architecture-review.md`** — authoritative on storage. Declines bring-your-own-storage for Phase 3.
+- **`docs/18-phase-4-brief.md`** — Phase 4 (Memories), and the four decisions settled before PR-17.
+
+`docs/09-api-design.md` is **superseded** — it describes a REST API for a system with no server. Everything else in `docs/01`–`docs/13` is the reasoning behind the plan, and predates implementation.
 
 **Read this file, then `.claude/current-session.md`, before doing anything else in any session.**
 
