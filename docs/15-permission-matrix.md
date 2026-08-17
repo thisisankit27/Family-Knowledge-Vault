@@ -184,6 +184,24 @@ Calendar Events.
 **`private` has no role branch at all.** Not Owner, not Admin. See §8.3 for why, and for the
 recovery paths that make it safe.
 
+> **Amended 2026-08-17 — the "or subject" half of this table describes no shipped record type.**
+>
+> The row above reads *"author **or subject** only"*, which is what `can_see_record` implements and
+> what §8.3 specifies. **No table passes it a subject.** `documents` has passed `null` since
+> `20260810090000` (§8.4's amendment), and `docs/18` §3.4 decided that `memories` will too. The
+> function is unchanged and the subject branch is still live inside it; nothing *calls* it.
+>
+> This is recorded here rather than only in §8.4 because **a reader who stops at this table gets the
+> wrong model for every record type that exists** — the table is the part people quote, and the
+> amendments live several sections below it.
+>
+> The rule as shipped, for records: **a `private` record is readable by its author alone.**
+> "Belongs to" is a label and grants nothing, which keeps *who is this about* and *who may read this*
+> as the two separate questions §8.4's amendment paid to separate.
+>
+> `family_activity` is the one table that still passes a real `subject_member_id`, and it is not a
+> record table.
+
 ## 4.5 Activity, Emergency, Legacy
 
 | Capability | Owner | Admin | Member | Guest | Note |
@@ -662,6 +680,21 @@ Two consequences for Phase 9, recorded now because they are cheap here and expen
 document whose `ai_processing` consent is withdrawn must have its derived artefacts **deleted**, not
 merely ignored — the model does not unlearn. And derived text inherits the *subject's* visibility,
 not the uploader's, since §8.3 already treats `member_id` as the subject.
+
+> **Amended 2026-08-17 — the last sentence now describes no table at all.**
+>
+> §12 already flagged it as stale for `documents`. `docs/18` §3.4 settled that `memories` also pass
+> `null` in the subject position, so **"derived text inherits the subject's visibility" is true of
+> zero shipped record types**, and Phase 9 must not implement it as written.
+>
+> **The principle is untouched and still load-bearing:** derived content carries its source row's
+> policy, and OCR text or an embedding is the record rather than an index over it. Only the clause
+> naming *which column supplies that policy* is wrong. As shipped, derived content inherits the
+> **author's** reach, because `created_by` is the only thing the `private` branch consults.
+>
+> The withdrawal-deletes-artefacts rule above is unaffected and applies to memories identically —
+> `memories.ai_processing` exists from PR-17 for the same reason `documents.ai_processing` existed
+> from PR-11: there is no defensible value to backfill consent with.
 
 ---
 

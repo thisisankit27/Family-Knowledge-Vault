@@ -4,7 +4,27 @@
 
 **Version:** 1.0
 
-**Status:** Draft
+**Status:** **SUPERSEDED — do not read this as a contract.** Marked 2026-08-17, during the Phase 4
+brief (`docs/18` §7.5).
+
+> This document describes a per-domain **REST API** — a "Memory API responsible for Stories, Photos,
+> Videos, Albums, Voice Notes", an Auth API, a Document API — for a system that **has no server**.
+>
+> `docs/17` §4.3 states the policy in as many words: *"There is no server, by written policy."* The
+> shipped architecture is **Postgres + Row-Level Security**, reached directly by the mobile client
+> through PostgREST and `supabase-js`, with `SECURITY DEFINER` functions for the operations a policy
+> cannot express, and a per-domain `XGateway` TypeScript interface as the only seam. Authorisation is
+> **function bodies and policies**, not middleware — `docs/15` §5 and §8.
+>
+> Nothing in this document has ever been built, and the names it uses do not correspond to anything
+> in the codebase.
+>
+> **What is still useful:** the *responsibilities* it assigns to each domain are a reasonable
+> inventory of what the product does, and §1's "technology-agnostic" framing is why it aged this way
+> rather than being wrong on day one. Treat it as an early domain sketch.
+>
+> **Authoritative instead:** `docs/15` for permissions, `docs/17` for storage, `docs/16` and
+> `docs/18` for what each phase actually builds, and `src/services/*.ts` for the real interfaces.
 
 ---
 

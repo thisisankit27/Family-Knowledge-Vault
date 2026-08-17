@@ -356,6 +356,27 @@ Attachments should be reusable across the platform.
 
 One uploaded file may appear in multiple contexts.
 
+> **Flagged 2026-08-17, not resolved — this section asks for something the schema deliberately does
+> not do** (`docs/18` §7.6).
+>
+> Attachments are **per-domain**, not shared. `document_files` shipped in PR-11; `memory_files`
+> follows the same shape in PR-18. `docs/17` §13 named this as the decision Phase 4 had to make
+> before the second table existed, and `docs/18` §3.1 made it: **per-domain tables, shared upload
+> code.**
+>
+> The reason is structural rather than a preference. A shared `record_files` table cannot express the
+> composite foreign key `(record_id, family_id) → parent(id, family_id)`, which is what makes an
+> attachment belonging to another family's record *impossible to represent* rather than merely
+> policy-refused — the proof PR-8 established and every record table has reused since. It would also
+> force a `record_type` discriminator into an RLS policy, the shape `docs/17` §10.2 bans.
+>
+> So **no file is currently reachable from two parents**, and nothing plans to make one so.
+>
+> This paragraph is left standing rather than deleted because it is the strongest existing argument
+> for the design that was declined, and a future reader deciding whether to revisit it is entitled to
+> see the original claim. **The owning question — is §15 wrong, or is it describing a Phase 12
+> feature? — has not been answered**, and should be by whoever next revises this document.
+
 ---
 
 # 16. Tagging Model
