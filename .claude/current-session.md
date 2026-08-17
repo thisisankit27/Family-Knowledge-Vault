@@ -2294,3 +2294,105 @@ Each was flagged rather than silently patched, per `docs/16` §6's convention:
 spine verbatim plus `title`, `story`, `occurred_on`, `occurred_precision`, `archived_at` and
 `ai_processing`; `visibility` defaults to **`family`**, diverging from documents on purpose and
 documented as a decision so nobody "fixes" it.
+
+---
+---
+
+# PR-17 Complete — Memories (2026-08-17)
+
+**The second record domain, and the first evidence that the first one generalised.** One migration,
+one service, one component file, four screens. `can_see_record` was not touched, no helper was
+added, and no role is named in any policy — the whole permission surface came from `docs/15` §8.2.
+
+**529 CI tests (was 472) · 272 RLS tests (was 240) · sixteen migrations.**
+
+## What shipped
+
+`20260817090000_create_memories.sql` — `memories` and `memory_members`. The `docs/15` §8.2 spine
+verbatim, plus `title`, `story`, `occurred_on`, `occurred_precision`, `location`, `archived_at` and
+`ai_processing`.
+
+- `src/services/memory.ts` — gateway, vocabulary, validation, `describeMemoryError`, pure view
+  helpers.
+- `src/components/MemoryFields.tsx` — visibility, date, subject and AI-consent fields.
+- `app/(app)/(tabs)/memories/` — list (grouped by year), `new.tsx` modal, `[memoryId]` detail.
+  The placeholder `memories.tsx` is gone.
+
+A family member can now write a memory with a story, say when and where it happened and who it is
+about, choose who may see it, browse them grouped by year, edit any field, archive and delete.
+
+## Three decisions worth keeping
+
+**`visibility` defaults to `family`, and documents default to `private`.** Recorded in the migration
+itself so nobody "fixes" it. A document is the most sensitive thing this product holds; a memory
+exists to be shared, and a memories tab where everything defaults to invisible ships an album nobody
+in the family can see. `docs/15` §8.5 explicitly left the per-table default open for this.
+
+**This inverts which audience is the common one.** On documents, the reader who is not the author was
+the rare case and arrived only in PR-15a. On memories it is the *default* case from the first render.
+So `canEdit = isAuthor && canWriteRecords(role)` was load-bearing on day one rather than being
+discovered later — and every write-refusal RLS test runs against a memory the attacker **can read**,
+which is the harder case and the one that catches a policy confusing reading with writing.
+
+**`occurred_precision` exists so the product does not invent facts.** A memory dated 1998 stores
+`1998-01-01` and renders as "1998", never "1 January 1998". Unknown dates are `null`, sort last, and
+say "Date unknown". Stamping an undated photograph with today to make it sortable would be the
+product lying about the one thing it exists to preserve.
+
+## The subject branch stayed closed, and there is now a test that says so
+
+`can_see_record`'s private branch grants to the author **or the subject**, and `20260810090000` left
+it live specifically so Phase 4-6 tables could take it. `docs/18` §3.4 declined. Every memories policy
+passes `null`.
+
+The test named *"hides a private memory from the member it names as its subject"* is the only thing
+that would fail if a later migration "restored" `member_id` to that position — which the documents
+migration header once speculated PR-15 would do. Named after the condition it depends on, per
+`docs/16`'s lesson about four storage tests that agreed with the wrong requirement.
+
+## Two bugs I caught in my own work
+
+- **The migration omitted the `visibility` column** while a later section tried to `alter` its
+  default. Caught by reading it back before applying, not by the database — `supabase migration up`
+  would have failed at the `alter`, but the create-table would already have committed the wrong shape
+  in a fresh reset.
+- **A unit test asserted `/MB/i` did not appear in a date line.** It matched "Nove**mb**er". The test
+  was wrong, not the code. Word-bounded now, with a comment saying why — an unanchored abbreviation
+  in a regex is a trap the next person would re-set.
+
+## Verified
+
+- `npm run typecheck` clean · `npm test` 529/529 · `npm run test:rls` 272/272, no regressions in the
+  240 that existed before.
+- Migration applied to the local stack with `npx supabase migration up`, then the columns and all
+  seven policies read back out of `information_schema` and `pg_policies` rather than assumed.
+- `npx expo export` bundles clean — catches bad route paths and imports that `tsc` does not.
+- **Not yet run on a device.** The list, the create modal and the detail screen need the on-stream
+  demo; that is the manual half of `CLAUDE.md`'s testing split and it has found three defects a green
+  suite did not.
+
+## Open items
+
+- **`location` was reversed into scope.** `docs/18` §11 had cut it; the product owner asked for it and
+  it shipped. The deferral is struck through in place with the reasoning, not deleted. Geocoding, a
+  map and place-based search remain unscheduled and are not implied by the column.
+- **`MemorySubjectField` and `MemoryAiConsentField` are near-twins of the document versions.** Not
+  shared, deliberately: the copy differs ("filed" vs "kept"), and extracting a common component would
+  mean editing the document screens inside a PR about memories. **PR-20 brings the third caller —
+  that is the moment to extract**, and it is recorded in `MemoryFields.tsx`'s header.
+- The in-file `Field` label wrapper is duplicated across the two memory screens, matching what
+  `documents` already does. Same rule-of-three.
+- `memories.deleted_at` is set by nothing, exactly as on `documents`. Delete is hard and confirmed.
+- **Memories are not in the activity feed.** `family_activity.action`'s check constraint has no
+  memory actions, and `docs/15` §9.5 requires any feed entry to inherit the row's visibility — a
+  `family`-default table makes that more urgent than documents did, not less.
+- `memory_members` has policies, tests and **no interface**. It is the same reserved-shape bet
+  `document_members` made in PR-11; PR-18 or PR-20 should give it one or the project has a sixth
+  capability reachable only by tests.
+
+## Next
+
+**PR-18 — Memory Photos.** `memory_files`, the four storage functions, and the
+`uploadRecordFile` refactor that `docs/18` §3.1 settled. The read/write predicate split
+(`owns_memory_object` / `can_read_memory_object`) goes in the **first** migration — documents needed
+three amendments to reach it, and that lesson is already paid for.

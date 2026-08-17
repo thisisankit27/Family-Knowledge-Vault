@@ -211,6 +211,7 @@ create table public.memories (
   occurred_on  date,
   occurred_precision text not null default 'day'
                  check (occurred_precision in ('day','month','year')),
+  location     text check (length(btrim(location)) <= 120),
   archived_at  timestamptz,
   ai_processing text not null default 'denied'
                  check (ai_processing in ('allowed','denied'))
@@ -634,7 +635,7 @@ A deleted cover memory falls back rather than dangling.
 | **Per-record ACLs** ("just Mum and Dad") | Still Phase 10, `docs/15` §10 — unchanged and re-argued, not inherited |
 | **Tags, locations as entities, faces, "on this day"** | Unscheduled. None is required by an FR |
 | **Soft-delete UI** | `deleted_at` remains set by nothing, as with documents. It needs a restore screen to mean anything |
-| **`location` on a memory** | Cut from §4.1. `docs/08` §9 wants it, but a free-text field with no map, no geocoding and no search is a string that looks like a feature |
+| ~~**`location` on a memory**~~ | ~~Cut from §4.1. `docs/08` §9 wants it, but a free-text field with no map, no geocoding and no search is a string that looks like a feature~~ **Reversed 2026-08-17, on the product owner's instruction, and shipped in PR-17.** The objection was to the *implied* feature, not the column, and it is answered by scoping the column honestly rather than by omitting it: `location` is free text, the field is labelled "Where", and there is no map, no geocoding and no search over it — none of which is claimed anywhere in the UI. It costs one nullable column and appears in the line under a memory's title, where "Nani's house" is exactly the context `docs/10` §13 asks for. Geocoding, a map and place-based search remain unscheduled and are not implied by this |
 
 ---
 
@@ -645,10 +646,11 @@ A deleted cover memory falls back rather than dangling.
 - [x] Video in or out (§3.3)
 - [x] Subject branch on private memories (§3.4)
 - [x] Which audio package, verified against SDK 54 (§7.1)
-- [ ] `src/navigation/domains.ts` still says `documents.arrivesIn: 'Phase 3'`. Harmless today — it is
-      only rendered for `MORE_DOMAINS` and in the `memories` empty state — but it is stale, and
-      `memories` will need the same edit when Phase 4 closes. **Fix both in PR-17**, not in this
-      documentation pass.
+- [x] `src/navigation/domains.ts` said `documents.arrivesIn: 'Phase 3'`. **Fixed in PR-17** →
+      `'Shipped'`. `memories` deliberately stays `'Phase 4'`: the field records where a domain *gets
+      built*, and the phase is not finished — PR-17 shipped memories, PR-18 to PR-20 ship
+      photographs, voice and albums. It becomes `'Shipped'` at PR-20. Note that after PR-17 the
+      field is no longer rendered for any tab domain at all; only `MORE_DOMAINS` shows it.
 - [ ] Run `npm ci && npm run typecheck && npm test` before pushing anything that touched
       dependencies. `npm install` and `npm ci` disagree, and CI runs the second.
 - [ ] Check the LAN IP in `.env.local` against `ip -4 addr` **first** when RLS tests die with

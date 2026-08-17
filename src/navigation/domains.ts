@@ -89,13 +89,17 @@ export const TAB_DOMAINS: Domain[] = [
     label: 'Documents',
     icon: 'document-text-outline',
     summary: 'Identity, property, finance, education, legal',
-    arrivesIn: 'Phase 3',
+    // Shipped when Phase 3 closed. Stale as 'Phase 3' until PR-17 noticed it.
+    arrivesIn: 'Shipped',
   },
   {
     id: 'memories',
     label: 'Memories',
     icon: 'images-outline',
     summary: 'Photos, videos, voice notes, and written stories',
+    // PR-17 shipped memories themselves; photographs, voice and albums are
+    // PR-18 to PR-20. Still 'Phase 4' because the phase is where it *gets
+    // built*, and the phase is not finished. Becomes 'Shipped' at PR-20.
     arrivesIn: 'Phase 4',
   },
 ];
