@@ -24,10 +24,10 @@ import {
   fileUrl,
   formatBytes,
   isPreviewable,
-  listDocumentFiles,
-  removeDocumentFile,
-  shareDocumentFile,
-  type DocumentFile,
+  listRecordFiles,
+  removeRecordFile,
+  shareRecordFile,
+  type RecordFile,
 } from '../../../../../src/services/storage';
 import { theme } from '../../../../../src/theme';
 
@@ -49,7 +49,7 @@ export default function FileViewerScreen() {
   const { role } = useFamily();
   const { session } = useAuth();
 
-  const [file, setFile] = useState<DocumentFile | null>(null);
+  const [file, setFile] = useState<RecordFile | null>(null);
   /*
     Only ever read for its author, which is why it holds the whole row rather
     than a boolean: a screen that stored `canEdit` would be storing a conclusion,
@@ -81,7 +81,7 @@ export default function FileViewerScreen() {
   );
 
   const mint = useCallback(
-    async (target: DocumentFile) => {
+    async (target: RecordFile) => {
       const minted = await fileUrl(gateway(), target);
       if (!minted.ok) {
         setError(minted.message);
@@ -97,7 +97,7 @@ export default function FileViewerScreen() {
       // The file comes from the document's list rather than a fetch by id: the
       // rows are already governed by the author-only policy, and one query is
       // cheaper than adding a second read path for a single row.
-      const result = await listDocumentFiles(gateway(), documentId);
+      const result = await listRecordFiles(gateway(), documentId);
       if (!result.ok) {
         setError(result.message);
         setLoading(false);
@@ -129,7 +129,7 @@ export default function FileViewerScreen() {
     setBusy(true);
     setError(null);
     try {
-      const result = await shareDocumentFile(
+      const result = await shareRecordFile(
         gateway(),
         file,
         async (signedUrl, filename) => {
@@ -164,7 +164,7 @@ export default function FileViewerScreen() {
         style: 'destructive',
         onPress: () => {
           void (async () => {
-            const result = await removeDocumentFile(gateway(), file);
+            const result = await removeRecordFile(gateway(), file);
             if (!result.ok) {
               setError(result.message);
               return;

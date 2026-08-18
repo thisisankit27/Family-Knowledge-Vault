@@ -2474,3 +2474,89 @@ closed for `member_id`, one level up.
 - Nothing destructive on membership change; nothing cascading on `family_users`.
 - `created_by` stays immutable and non-optional.
 - Do not build on `FamilyProvider`'s `families[0]`.
+
+---
+---
+
+# PR-18 Complete — Memory Photos (2026-08-18)
+
+**538 CI tests (was 529) · 299 RLS tests (was 272) · seventeen migrations.**
+
+`20260818090000_memory_storage.sql` — `memory_files`, four functions, five policies, one trigger.
+Photographs attach to a memory, appear as a grid, open full-screen and share out.
+
+## The thing this PR was for
+
+**Both storage predicates on day one.** Documents reached `owns_document_object` /
+`can_read_document_object` across three migrations and two corrections; this migration writes both
+from the start. That mattered more here than it did there: memories default to `family`, so
+PR-15a's failure — a **visible** row whose bytes are unreachable — would have been the *normal*
+case rather than an edge one. A single-predicate version would have been broken for almost every
+row it governed.
+
+The RLS suite proves both directions rather than one, and the test that would have caught a
+single-predicate version is *"refuses another member an allocated path for a family memory they can
+read"*: `other` can read the row and fetch the bytes, and still may not write.
+
+## The refactor docs/18 §3.1 settled
+
+`uploadDocumentFile` → **`uploadRecordFile`**, parameterised by `RecordFileKind` — allocate RPC,
+attach RPC, parent param, table, parent column, download noun, accepted MIME types. `DOCUMENT_FILES`
+and `MEMORY_FILES` are the two. `DocumentFile` → `RecordFile`, `documentId` → `recordId`.
+
+Done **as a refactor when the second caller arrived**, not written ahead of it. The SQL stayed
+per-domain for the reason §3.1 gives: a polymorphic table cannot express the composite FK, and a
+type discriminator inside an RLS policy is the shape `docs/17` §10.2 bans.
+
+The kind travels **with the gateway**, not as a separate argument, so a screen cannot pair a memory
+gateway with a document allow-list. There is a test for exactly that.
+
+## Two deliberate narrowings
+
+- **Memories accept images only.** The bucket permits PDFs and documents still use them;
+  `MEMORY_FILES.acceptedMimeTypes` is `IMAGE_MIME_TYPES`. This keeps the grid honest — everything in
+  it renders — and the refusal message names what a *memory* takes rather than what the bucket
+  permits. `imagesOnly` also hides the file-browser source, so the refusal arrives before the
+  choosing rather than after it.
+- **Compression is per caller, not global.** `FileSourcePicker` gained `quality`; memories pass
+  `0.7`, documents pass **nothing**. A holiday photograph survives re-encoding; a passport scan's
+  whole job is to stay legible, and compressing one to save quota would trade the thing for the space
+  it takes. `docs/18` §9 makes compression a requirement, and this is the honest reading of it.
+
+## §13.6 constraints, honoured
+
+- `provider_file_id` stays **opaque** — the `RecordFile` doc comment says so in as many words, and
+  nothing outside the allocator parses or builds one.
+- Every read predicate resolves through `can_see_record`. No second place derives visibility from
+  family membership.
+- Nothing destructive on membership change; nothing cascades on `family_users`.
+- `created_by` untouched and still pinned.
+
+## An observation, not a change
+
+`authenticated` holds **TRUNCATE** on every public table — `documents`, `memories`, both file
+tables. It comes from Supabase's `pg_default_acl` (`Dxtm` to anon/authenticated/service_role), not
+from anything this project wrote, and it is **identical on `document_files` and `memory_files`**, so
+PR-18 introduced nothing. TRUNCATE bypasses RLS, but PostgREST has no TRUNCATE mapping, so it is not
+reachable through the API surface — it would need direct Postgres credentials, which is game over
+regardless. Recorded as a hardening item for Phase 10's Security Center, not acted on here.
+
+## Open items
+
+- **Not yet demonstrated on a device.** Upload, grid, viewer and share sheet all need the stream.
+  This is the half that has found the defects a green suite did not, three times.
+- **Thumbnails still deferred.** The grid downloads full-size images and scales them, which is fine
+  for a handful and wasteful for forty. `memory_files.kind` reserves the slot; Supabase image
+  transforms are Pro-only.
+- **No zoom or pan** in the viewer, same as documents.
+- **`memory_members` still has no interface** — unchanged from PR-17, now the only Phase 4 table in
+  that state. PR-20 should give it one.
+- Memories are still absent from the activity feed.
+- `duration_seconds` shipped unused, reserved for PR-19. `docs/18` §9 updated so PR-19 does not add
+  it twice.
+
+## Next
+
+**PR-19 — Voice Memories.** `npx expo install expo-audio` (not `expo-av`, which is removed in SDK
+55). Widen the bucket's `allowed_mime_types` and `MEMORY_FILES.acceptedMimeTypes` together — they are
+two halves of one decision and drifting them apart is how the first upload fails on a stream.

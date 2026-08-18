@@ -5,7 +5,7 @@ import {
   type FilingProgress,
 } from './filing';
 import type { CreateDocumentInput, DocumentGateway, FamilyDocument } from './document';
-import type { StorageGateway, UploadCandidate } from './storage';
+import { DOCUMENT_FILES, type StorageGateway, type UploadCandidate } from './storage';
 
 function document(overrides: Partial<FamilyDocument> = {}): FamilyDocument {
   return {
@@ -76,6 +76,7 @@ function documents(overrides: Partial<DocumentGateway> = {}): DocumentGateway {
 function storage(overrides: Partial<StorageGateway> = {}): StorageGateway {
   let allocated = 0;
   return {
+    kind: DOCUMENT_FILES,
     async allocatePath(documentId) {
       allocated += 1;
       return { data: `fam-1/${documentId}/object-${allocated}.jpg`, error: null };
@@ -89,10 +90,11 @@ function storage(overrides: Partial<StorageGateway> = {}): StorageGateway {
       return {
         data: {
           id: `file-${allocated}`,
-          documentId: 'doc-1',
+          recordId: 'doc-1',
           providerFileId: `fam-1/doc-1/object-${allocated}.jpg`,
           kind: 'original' as const,
           mimeType: 'image/jpeg',
+          durationSeconds: null,
           sizeBytes: 1024,
           originalFilename: 'front.jpg',
           createdAt: '2026-08-13T10:00:00.000Z',

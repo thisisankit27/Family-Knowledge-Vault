@@ -1,9 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { File as DeviceFile } from 'expo-file-system';
+import { Link, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { Button } from '../../../../../src/components/Button';
+import { FileSourcePicker } from '../../../../../src/components/FileSourcePicker';
+import { ProgressBar } from '../../../../../src/components/ProgressBar';
 import {
   MemoryAiConsentField,
   MemoryDateField,
@@ -42,6 +54,16 @@ import {
   type MemoryPrecision,
 } from '../../../../../src/services/memory';
 import { canWriteRecords } from '../../../../../src/services/role';
+import {
+  MEMORY_FILES,
+  createSupabaseStorageGateway,
+  fileUrl,
+  listRecordFiles,
+  uploadRecordFile,
+  type RecordFile,
+  type UploadCandidate,
+} from '../../../../../src/services/storage';
+import { getSupabaseEnv } from '../../../../../src/lib/env';
 import { theme } from '../../../../../src/theme';
 
 /**
@@ -187,6 +209,8 @@ export default function MemoryScreen() {
         onError={setError}
         render={(value) => <Text style={styles.story}>{value}</Text>}
       />
+
+      <Photographs memoryId={memory.id} canEdit={canEdit} />
 
       <Field label="When">
         {canEdit ? (
@@ -484,6 +508,206 @@ function DateEditor({
   );
 }
 
+/**
+ * The photographs kept with a memory.
+ *
+ * Owns its own state and its own load, exactly as the documents screen's
+ * attachment list does — the parent screen is about the record, and a failed
+ * upload must not blank the story somebody is reading.
+ *
+ * **A grid rather than a list.** A document's attachment is a thing you open; a
+ * memory's is a thing you look at, and `docs/10` §4 asks this product to feel
+ * like a family album rather than a file manager.
+ */
+function Photographs({ memoryId, canEdit }: { memoryId: string; canEdit: boolean }) {
+  const [files, setFiles] = useState<RecordFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState<{ index: number; total: number; fraction: number } | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const gateway = useCallback(
+    () => createSupabaseStorageGateway(getSupabase(), { url: getSupabaseEnv().url }, MEMORY_FILES),
+    [],
+  );
+
+  const load = useCallback(async () => {
+    const result = await listRecordFiles(gateway(), memoryId);
+    if (!result.ok) {
+      setError(result.message);
+      setFiles([]);
+    } else {
+      setError(null);
+      setFiles(result.files);
+    }
+    setLoading(false);
+  }, [gateway, memoryId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  /**
+   * Upload a batch one at a time, keeping whatever worked.
+   *
+   * Sequential rather than concurrent because there is one progress bar and it
+   * has to mean something (NFR-007). The reload is in `finally` — PR-15b's
+   * fourth bug was an early return on failure that skipped it, hiding the files
+   * that had uploaded successfully. **The list is least trustworthy at exactly
+   * the moment something went wrong.**
+   */
+  async function attachAll(candidates: UploadCandidate[]) {
+    setError(null);
+    const failed: string[] = [];
+
+    try {
+      for (const [index, candidate] of candidates.entries()) {
+        setProgress({ index: index + 1, total: candidates.length, fraction: 0 });
+
+        const outcome = await uploadRecordFile(
+          gateway(),
+          memoryId,
+          candidate,
+          async (uri) => new DeviceFile(uri).bytes(),
+          (fraction) => setProgress({ index: index + 1, total: candidates.length, fraction }),
+        );
+
+        if (!outcome.ok) failed.push(outcome.message);
+      }
+    } finally {
+      setProgress(null);
+      await load();
+    }
+
+    if (failed.length > 0) {
+      setError(
+        failed.length === 1
+          ? failed[0]
+          : `${failed.length} of ${candidates.length} photos could not be added.`,
+      );
+    }
+  }
+
+  return (
+    <Field label={files.length === 1 ? '1 photo' : `${files.length} photos`}>
+      {loading ? <ActivityIndicator color={theme.colors.primary} /> : null}
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      {progress ? (
+        <ProgressBar
+          fraction={progress.fraction}
+          label={
+            progress.total === 1
+              ? 'Adding your photo'
+              : `Adding photo ${progress.index} of ${progress.total}`
+          }
+        />
+      ) : null}
+
+      {!loading && files.length === 0 && !progress ? (
+        <Text style={styles.empty}>
+          {canEdit ? 'No photographs yet.' : 'No photographs were added to this memory.'}
+        </Text>
+      ) : null}
+
+      {files.length > 0 ? (
+        <View style={styles.grid}>
+          {files.map((file) => (
+            <Thumbnail key={file.id} memoryId={memoryId} file={file} />
+          ))}
+        </View>
+      ) : null}
+
+      {canEdit ? (
+        <FileSourcePicker
+          label="Add photos"
+          multiple
+          imagesOnly
+          // Compressed on the way in. docs/18 §9 makes this a requirement: at
+          // 10MB a file against a ~1GB tier, uncompressed phone photographs are
+          // about a hundred pictures for every family that will ever exist.
+          quality={0.7}
+          onPicked={(candidates) => void attachAll(candidates)}
+          onError={setError}
+          disabled={progress !== null}
+        />
+      ) : null}
+    </Field>
+  );
+}
+
+/**
+ * One photograph in the grid, which mints its own URL and never keeps it.
+ *
+ * `docs/17` §10.1: never store a URL, and never let its expiry reach a
+ * component. This asks for one when it mounts and re-asks once if the image
+ * fails to load, which is what a 300-second TTL looks like from the UI. The
+ * retry is bounded — a second failure is a real failure, and a component that
+ * re-mints forever would hammer storage behind a broken thumbnail.
+ */
+function Thumbnail({ memoryId, file }: { memoryId: string; file: RecordFile }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [retried, setRetried] = useState(false);
+  const [broken, setBroken] = useState(false);
+
+  const mint = useCallback(async () => {
+    const gateway = createSupabaseStorageGateway(
+      getSupabase(),
+      { url: getSupabaseEnv().url },
+      MEMORY_FILES,
+    );
+    const minted = await fileUrl(gateway, file);
+    if (minted.ok) setUrl(minted.url);
+    else setBroken(true);
+  }, [file]);
+
+  useEffect(() => {
+    void mint();
+  }, [mint]);
+
+  if (broken) {
+    return (
+      <View style={[styles.thumb, styles.thumbBroken]}>
+        <Ionicons name="image-outline" size={20} color={theme.colors.textMuted} />
+      </View>
+    );
+  }
+
+  return (
+    <Link
+      href={{
+        pathname: '/(app)/(tabs)/memories/[memoryId]/[fileId]',
+        params: { memoryId, fileId: file.id },
+      }}
+      asChild
+    >
+      <Pressable style={styles.thumb} accessibilityRole="button" accessibilityLabel="Open photo">
+        {url ? (
+          <Image
+            source={{ uri: url }}
+            style={styles.thumbImage}
+            resizeMode="cover"
+            onError={() => {
+              if (retried) {
+                setBroken(true);
+                return;
+              }
+              setRetried(true);
+              void mint();
+            }}
+          />
+        ) : (
+          <ActivityIndicator color={theme.colors.primary} />
+        )}
+      </Pressable>
+    </Link>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <View style={styles.field}>
@@ -548,6 +772,28 @@ const styles = StyleSheet.create({
   editActions: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  thumb: {
+    width: 104,
+    height: 104,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceSunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  thumbBroken: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  thumbImage: {
+    width: '100%',
+    height: '100%',
   },
   actions: {
     flexDirection: 'row',
