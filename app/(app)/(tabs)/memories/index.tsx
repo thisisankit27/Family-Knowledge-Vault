@@ -127,6 +127,16 @@ function MemoryList({ familyId, canKeep }: { familyId: string; canKeep: boolean 
         </Pressable>
       ) : null}
 
+      <Pressable
+        onPress={() => router.push('/(app)/(tabs)/memories/albums')}
+        style={styles.albumsAction}
+        accessibilityRole="button"
+      >
+        <Ionicons name="albums-outline" size={20} color={theme.colors.primary} />
+        <Text style={styles.albumsActionText}>Albums</Text>
+        <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+      </Pressable>
+
       {error ? (
         <View style={styles.notice}>
           <Ionicons name="alert-circle-outline" size={18} color={theme.colors.error} />
@@ -284,6 +294,23 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
   },
   keepActionText: {
+    color: theme.colors.primary,
+    fontSize: theme.typography.body,
+    fontWeight: '600',
+  },
+  albumsAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  albumsActionText: {
+    flex: 1,
     color: theme.colors.primary,
     fontSize: theme.typography.body,
     fontWeight: '600',

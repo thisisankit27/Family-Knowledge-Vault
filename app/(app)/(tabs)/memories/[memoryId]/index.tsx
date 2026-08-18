@@ -20,6 +20,7 @@ import { VoicePlayer, VoiceRecorder } from '../../../../../src/components/VoiceN
 import {
   MemoryAiConsentField,
   MemoryDateField,
+  MemoryPeopleField,
   MemorySubjectField,
   MemoryVisibilityField,
 } from '../../../../../src/components/MemoryFields';
@@ -38,6 +39,9 @@ import {
   VISIBILITY_LABELS,
   createSupabaseMemoryGateway,
   deleteMemory,
+  linkMemoryPerson,
+  listMemoryPeople,
+  unlinkMemoryPerson,
   describeMemoryAuthor,
   describeMemoryDate,
   describeMemorySubject,
@@ -54,6 +58,15 @@ import {
   type FamilyMemory,
   type MemoryPrecision,
 } from '../../../../../src/services/memory';
+import {
+  addMemoryToAlbum,
+  albumsContaining,
+  createSupabaseAlbumGateway,
+  listAlbumEntries,
+  listAlbums,
+  removeMemoryFromAlbum,
+  type Album,
+} from '../../../../../src/services/album';
 import { canWriteRecords } from '../../../../../src/services/role';
 import {
   MEMORY_FILES,
@@ -91,6 +104,7 @@ export default function MemoryScreen() {
 
   const [memory, setMemory] = useState<FamilyMemory | null>(null);
   const [people, setPeople] = useState<Member[]>([]);
+  const [namedPeople, setNamedPeople] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,6 +128,11 @@ export default function MemoryScreen() {
       if (familyId) {
         setPeople(await listMembers(createSupabaseMemberGateway(client), familyId));
       }
+
+      const named = await listMemoryPeople(createSupabaseMemoryGateway(client), memoryId);
+      // A refused read here is not worth blanking the screen for: the memory
+      // loaded, and "nobody else named" is the honest fallback.
+      setNamedPeople(new Set(named.ok ? named.memberIds : []));
     }
 
     setLoading(false);
@@ -256,6 +275,29 @@ export default function MemoryScreen() {
         )}
       </Field>
 
+      <Field label="Who else was there">
+        <MemoryPeopleField
+          value={namedPeople}
+          people={people}
+          subjectId={memory.memberId}
+          readOnly={!canEdit}
+          onToggle={(memberId, next) =>
+            void save(
+              () =>
+                next
+                  ? linkMemoryPerson(createSupabaseMemoryGateway(getSupabase()), {
+                      memoryId: memory.id,
+                      memberId,
+                      familyId: familyId!,
+                    })
+                  : unlinkMemoryPerson(createSupabaseMemoryGateway(getSupabase()), memory.id, memberId),
+              load,
+              setError,
+            )
+          }
+        />
+      </Field>
+
       <Field label="Who can see it">
         {canEdit ? (
           <MemoryVisibilityField
@@ -275,6 +317,12 @@ export default function MemoryScreen() {
           <Text style={styles.value}>{VISIBILITY_LABELS[memory.visibility]}</Text>
         )}
       </Field>
+
+      {familyId ? (
+        <Field label="Albums">
+          <AlbumMembership memoryId={memory.id} familyId={familyId} onError={setError} />
+        </Field>
+      ) : null}
 
       <Field label="AI">
         <MemoryAiConsentField
@@ -828,6 +876,106 @@ function Thumbnail({ memoryId, file }: { memoryId: string; file: RecordFile }) {
   );
 }
 
+/**
+ * Which of *your* albums this memory is in.
+ *
+ * Only albums you authored are offered, because only their author may add to
+ * them — the `album_memories` INSERT policy requires it. Listing somebody
+ * else's album with a checkbox that always fails would be a control that asks a
+ * question it will not accept an answer to, which is the disabled-checkbox
+ * defect PR-15a paid for, wearing a different hat.
+ *
+ * Adding a memory to an album **changes nothing about who can read the memory**.
+ * The album is a way of looking at memories; every reader still resolves each
+ * memory through its own policy, and a private memory in a family album stays
+ * invisible to everyone but its author.
+ */
+function AlbumMembership({
+  memoryId,
+  familyId,
+  onError,
+}: {
+  memoryId: string;
+  familyId: string;
+  onError: (message: string | null) => void;
+}) {
+  const { session } = useAuth();
+  const [albums, setAlbums] = useState<Album[]>([]);
+  const [inAlbums, setInAlbums] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const gateway = createSupabaseAlbumGateway(getSupabase());
+    const [listed, entries] = await Promise.all([
+      listAlbums(gateway, familyId),
+      listAlbumEntries(gateway, familyId),
+    ]);
+
+    setAlbums(listed.ok ? listed.albums : []);
+    setInAlbums(entries.ok ? albumsContaining(entries.entries, memoryId) : new Set());
+    setLoading(false);
+  }, [familyId, memoryId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  const mine = albums.filter((album) => album.createdBy === session?.user.id);
+
+  if (loading) return <ActivityIndicator color={theme.colors.primary} />;
+
+  if (mine.length === 0) {
+    return (
+      <Text style={styles.empty}>
+        You have no albums yet. Make one from the Albums screen and this memory can go in it.
+      </Text>
+    );
+  }
+
+  async function toggle(albumId: string, next: boolean) {
+    setBusy(true);
+    const gateway = createSupabaseAlbumGateway(getSupabase());
+    const outcome = next
+      ? await addMemoryToAlbum(gateway, { albumId, memoryId, familyId })
+      : await removeMemoryFromAlbum(gateway, albumId, memoryId);
+    setBusy(false);
+
+    if (!outcome.ok) {
+      onError(outcome.message);
+      return;
+    }
+    onError(null);
+    await load();
+  }
+
+  return (
+    <View style={styles.albumChips}>
+      {mine.map((album) => {
+        const active = inAlbums.has(album.id);
+        return (
+          <Pressable
+            key={album.id}
+            onPress={() => void toggle(album.id, !active)}
+            disabled={busy}
+            style={[styles.albumChip, active ? styles.albumChipActive : null]}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: active, disabled: busy }}
+            accessibilityLabel={album.title}
+          >
+            {active ? <Ionicons name="checkmark" size={14} color={theme.colors.primary} /> : null}
+            <Text style={[styles.albumChipText, active ? styles.albumChipTextActive : null]}>
+              {album.title}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <View style={styles.field}>
@@ -931,6 +1079,34 @@ const styles = StyleSheet.create({
     height: theme.touchTarget,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  albumChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  albumChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  albumChipActive: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.primary,
+  },
+  albumChipText: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.caption,
+  },
+  albumChipTextActive: {
+    color: theme.colors.primary,
+    fontWeight: '600',
   },
   actions: {
     flexDirection: 'row',

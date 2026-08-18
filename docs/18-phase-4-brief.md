@@ -270,8 +270,45 @@ PK `(memory_id, member_id)`; composite FKs to `memories(id, family_id)` and
 
 ## 4.4 `albums` and `album_memories`
 
-`albums` copies the spine and adds `title` and `cover_memory_id`. `album_memories` carries
-`(album_id, memory_id, family_id, position, created_at)`.
+~~`albums` copies the spine and adds `title` and `cover_memory_id`. `album_memories` carries
+`(album_id, memory_id, family_id, position, created_at)`.~~
+
+> **Amended 2026-08-20, before PR-20 was written — `cover_memory_id` leaks the thing §6.1 exists to
+> prevent, one level up.**
+>
+> §6.1 catches the disclosure on `album_memories` and misses it on the album row itself. `albums`'
+> SELECT policy is `can_see_record(family_id, visibility, null, created_by)` and says nothing about a
+> cover. So **a `family` album whose cover is a `private` memory hands that memory's id to every
+> member who can read the album.** They cannot read the memory — the memories policy still refuses —
+> but learning that a private memory *exists*, and its id, is precisely the existence disclosure §6.1
+> was written about. Same failure, one table up, and the same sentence covers it: *the row hidden,
+> the things hanging off it not.*
+>
+> **The cover is derived, not stored.** It is the first memory of the album that the *viewer* can
+> see, chosen through the same both-sides join `album_memories` already needs. That is not a
+> workaround for the leak; it is a better column-free design, and it dissolves three problems instead
+> of solving one:
+>
+> | | Stored `cover_memory_id` | Derived |
+> |---|---|---|
+> | Private memory as cover discloses its id | yes | **cannot happen** |
+> | Cover memory deleted | dangling FK, needs `on delete set null` and a fallback | **dissolves** |
+> | Cover memory later made `private` | goes stale and keeps leaking | **self-corrects per viewer** |
+> | Cost | a column, an FK, fallback logic | **none** |
+>
+> This is §4.1's existing rule — *"a stored counter is a second copy of a permission-filtered fact"* —
+> applied to a cover, which is exactly the same kind of fact.
+>
+> **What it costs: the author cannot choose the cover.** No FR asks for that, and it stays available
+> later as a stored id read back through the same visibility join rather than straight off the row.
+> **v1 has no manual cover selection.**
+>
+> **`position` is also dropped**, not deferred. §9 already makes reordering this PR's cut line, and a
+> column that needs a reorder UI to mean anything is a column with no interface. Ordering is by the
+> memory's own date, which is the ordering the memories list already uses.
+>
+> **As built:** `albums` = spine + `title`. `album_memories` = `(album_id, memory_id, family_id,
+> created_at)`, primary key on the pair.
 
 ## 4.5 The timeline is not an entity
 
@@ -394,6 +431,16 @@ the visible join and never stored (§4.1).
 
 This is the one genuinely new security question Phase 4 raises. Everything else is Phase 3's model
 applied to a second noun.
+
+> **Extended 2026-08-20 — it was not only the join table.** The same disclosure existed on
+> `albums.cover_memory_id`, which this section did not consider because it was looking at the link
+> rather than at the row. §4.4's amendment removes the column: **the cover is derived per viewer**
+> from the same both-sides join, so there is no id on the album row to leak.
+>
+> The generalisable form, worth carrying into Phase 5: **any column holding the id of a record with
+> its own visibility is a disclosure unless the policy that returns it also checks that record.** A
+> foreign key is a fact about another row, and the row it points at may be one the reader may not
+> know exists.
 
 ---
 
@@ -628,17 +675,26 @@ with. Do not let that intuition become a second ownership rule in code: it resol
 
 **Purpose.** Group memories into a named collection with a cover, and browse it.
 
-**Database.** `albums` + `album_memories`. **Storage.** None — a cover references a memory's existing
-photo.
+**Database.** `albums` + `album_memories`. **Storage.** None — ~~a cover references a memory's
+existing photo~~ **the cover is derived per viewer and stored nowhere** (§4.4 as amended).
 
 **RLS.** Album policies mirror memories. **`album_memories` requires both sides visible** (§6.1), and
 the headline test of this PR is that a `family` album containing a `private` memory does not disclose
 that memory's id to another member.
 
 **Edge cases.** A memory may sit in several albums. Deleting an album must not delete its memories.
-A deleted cover memory falls back rather than dangling.
+~~A deleted cover memory falls back rather than dangling.~~ — **dissolved**: there is no stored
+cover to dangle.
 
-**Cut line.** `position` and manual reordering — date order is a good default.
+**Cut line.** ~~`position` and manual reordering~~ — **dropped outright rather than deferred**, since
+a column needing a reorder UI to mean anything is a column with no interface.
+
+> **Also shipped in PR-20, and it is the reason this PR is bigger than its title:**
+> `memory_members` had policies and RLS tests from PR-17 and **no way to reach it**. Closing Phase 4
+> with it untouched would have been the sixth time this project shipped a capability only its tests
+> could exercise (`docs/16` §6.1 counts five). The memory detail screen gains *"Who else was there"* —
+> a multi-select that, like the subject beside it, **grants nothing**. `document_members` has the same
+> gap and keeps it: that is Phase 3's debt, not Phase 4's.
 
 **Lifecycle constraint (§13.6).** An album is the first thing that groups content *across* authors,
 so it is where "whose is this collection" first has no obvious answer — and it is the last PR before

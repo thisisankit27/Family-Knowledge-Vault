@@ -2653,3 +2653,102 @@ rule in code. It has not: there is no audio-specific permission anywhere.
 
 **PR-20 — Albums**, the last PR of Phase 4. Then the **Content Ownership & Family Lifecycle review**
 (`docs/18` §13.5) before Phase 5, and the landing-page update that closes the phase.
+
+---
+---
+
+# PR-20 Complete — Albums, and the last unreachable capability (2026-08-20)
+
+**581 CI tests (was 544) · 331 RLS tests (was 308) · nineteen migrations. Phase 4's last PR.**
+
+Two responsibilities: albums, and giving `memory_members` an interface before the phase closed.
+
+## The security finding, found before any code was written
+
+`docs/18` §6.1 catches the existence disclosure on `album_memories` and **missed the same one on the
+album row itself.** `albums`' SELECT policy says nothing about a cover, so the specified
+`cover_memory_id` would have handed the id of a `private` memory to everyone who could read a
+`family` album. Same failure, one table up.
+
+**The cover is derived per viewer instead** — the first photograph of the most recent memory *that
+reader* can see. Recorded as a dated amendment to §4.4 and §6.1 **before implementation**, per
+instruction.
+
+It is a better design rather than a patch, and it dissolves three problems instead of solving one: no
+id to leak, nothing to dangle when a memory is deleted, and it self-corrects when a memory becomes
+private. The generalisable form, now in §6.1: **any column holding the id of a record with its own
+visibility is a disclosure unless the policy returning it also checks that record.**
+
+Two readers of one album can legitimately see different covers. That is the design working.
+
+## The both-ends rule
+
+`album_memories`' SELECT requires visibility of the album **and** the memory. The test named *"does
+not disclose the id of a PRIVATE memory inside a FAMILY album"* is the only thing that fails if that
+ever becomes one condition, and it is the headline of the suite.
+
+The asymmetry in the write policies is deliberate and worth keeping:
+
+- **INSERT** needs authorship of the *album* and *visibility* of the memory — not authorship of the
+  memory. Curating somebody else's family memory is an act on the album; it widens nobody's access,
+  because every reader still resolves the memory through its own policy. Requiring authorship would
+  mean a family album could only hold one person's photographs.
+- **DELETE** needs only the album. Requiring visibility of the memory would strand exactly the link
+  added while a memory was shared and orphaned once it was not. There is a test for that.
+
+## `memory_members` finally has an interface
+
+Policies and RLS tests since PR-17, zero app code. Closing Phase 4 with it untouched would have been
+the **sixth** time this project shipped a capability only its tests could exercise.
+
+The memory detail screen gains *"Who else was there"*, a multi-select beside the existing *"Who it is
+about"*. **Kept as two controls on purpose** — the subject is one person on the spine, this is
+everybody else in a join table, and collapsing them would be the conflation `20260810090000` closed.
+Both say plainly that they grant nothing, because every memories policy passes `null` in
+`can_see_record`'s subject position.
+
+Not folded into `ChipGroup`: its "re-tapping the active option clears it" rule is exactly wrong for a
+set, and a `multiple` flag would make one component answer two questions.
+
+**`document_members` has the identical gap and keeps it.** That is Phase 3's debt, and widening this
+PR to cover it would have meant touching the documents screens in a PR about albums.
+
+## Deliberately not built
+
+No `position` or reordering — dropped outright rather than deferred, since a column needing a reorder
+UI to mean anything is a column with no interface. No manual cover selection. No co-curators, no
+shared-album ownership, **no collection-level permission of any kind** — that is `docs/18` §13.6's
+note for this PR, and an album is the first thing that groups content across authors, so it is
+exactly where that temptation appears.
+
+## §13.6, untouched
+
+Albums get the ordinary spine and `can_see_record` decides. No storage, so `provider_file_id` is not
+involved. Nothing destructive on membership change; `created_by` pinned by trigger.
+
+## Verified
+
+- `npm run typecheck` clean · `npm test` 581/581 · `npm run test:rls` 331/331, no regressions.
+- Migration applied and the policies and columns read back — confirming no `cover_memory_id`, no
+  `position`, no `archived_at`, no `ai_processing` on `albums`.
+- `npx expo export` bundles clean.
+- **Not yet demonstrated on a device.**
+
+## Open items
+
+- Album screens need the on-stream demo.
+- `albums.member_id` ships with no control — spine fidelity, the same status
+  `documents.member_id` had between PR-11 and PR-13 (`docs/16` §6.4's "the schema makes room").
+- `document_members` still unreachable.
+- Memories and albums are both absent from the activity feed.
+- No album cover choice, no reordering, no nested albums.
+
+## Next
+
+**Phase 4 is feature-complete.** Two things close it, in order:
+
+1. **The Content Ownership & Family Lifecycle review** (`docs/18` §13.5), before Phase 5 — because
+   `docs/14` §7 says Medical *"reuses the Documents CRUD pattern almost directly"* and will inherit
+   whatever the answer turns out to be.
+2. **The landing-page update**, which `CLAUDE.md` makes the last act of every phase — and
+   `src/navigation/domains.ts` sets `memories.arrivesIn` to `'Shipped'` at the same time.
