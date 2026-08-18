@@ -35,13 +35,26 @@ export const FILE_BUCKET = 'family-files';
  */
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
-/** Mirrors the bucket's `allowed_mime_types`. Phase 4 adds audio and video. */
+/**
+ * Mirrors the bucket's `allowed_mime_types`, and **must be changed with it**.
+ *
+ * The duplication is deliberate and both copies are load-bearing: the bucket is
+ * the real limit, because a cap enforced only in an app bundle lasts until
+ * somebody points curl at the endpoint, while this copy is what stops a user
+ * waiting through an upload to be told no. Changing one without the other is how
+ * the first recording fails, live, at the last step.
+ *
+ * Audio arrived in `20260819090000` alongside these two entries. **Video stays
+ * out** until Phase 12 revisits the 10MB per-file cap it depends on.
+ */
 export const ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'image/heic',
   'image/webp',
   'application/pdf',
+  'audio/mp4',
+  'audio/m4a',
 ] as const;
 
 export type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
@@ -49,13 +62,32 @@ export type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
 /**
  * The subset that is a picture.
  *
- * Not a second allow-list — a narrowing of the one above, so a type the bucket
- * would refuse cannot appear here. Memories accept these and nothing else in
- * PR-18 (see `MEMORY_FILES`).
+ * Listed rather than derived by exclusion. `filter(t => t !== 'application/pdf')`
+ * was correct while PDFs were the only non-image, and silently wrong the moment
+ * audio joined the list — the sort of thing that typechecks and ships. A test
+ * asserts every entry here is one the bucket accepts.
  */
-export const IMAGE_MIME_TYPES = ALLOWED_MIME_TYPES.filter(
-  (mimeType) => mimeType !== 'application/pdf',
-);
+export const IMAGE_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/webp',
+] as const;
+
+/**
+ * What `expo-audio`'s HIGH_QUALITY preset produces: `.m4a`, MPEG-4 container,
+ * AAC, on both platforms.
+ *
+ * Two types for one format. `audio/mp4` is canonical and is what this app sends;
+ * `audio/m4a` is the variant other tools emit for identical bytes, and refusing
+ * it would produce a failure naming a MIME type the user never chose.
+ */
+export const AUDIO_MIME_TYPES = ['audio/mp4', 'audio/m4a'] as const;
+
+/** Whether this file is something to listen to rather than look at. */
+export function isAudio(mimeType: string): boolean {
+  return (AUDIO_MIME_TYPES as readonly string[]).includes(mimeType);
+}
 
 /**
  * The extension the stored object gets.
@@ -71,6 +103,9 @@ const EXTENSIONS: Record<AllowedMimeType, string> = {
   'image/heic': 'heic',
   'image/webp': 'webp',
   'application/pdf': 'pdf',
+  // Both map to the same extension because they describe the same bytes.
+  'audio/mp4': 'm4a',
+  'audio/m4a': 'm4a',
 };
 
 export function isAllowedMimeType(value: unknown): value is AllowedMimeType {
@@ -99,7 +134,7 @@ export function extensionFor(mimeType: string): string | null {
  * build, or a bundled `pdf.js`, could revisit this.
  */
 export function isPreviewable(mimeType: string): boolean {
-  return isAllowedMimeType(mimeType) && mimeType !== 'application/pdf';
+  return (IMAGE_MIME_TYPES as readonly string[]).includes(mimeType);
 }
 
 /**
@@ -164,6 +199,16 @@ export interface RecordFileKind {
   /** What a file of this kind is called when it lands on somebody's phone. */
   downloadNoun: string;
   /**
+   * Whether this domain's attach RPC takes a duration.
+   *
+   * Memories do; documents do not, and PostgREST refuses an argument a function
+   * does not declare — so this is a fact about the signature rather than a
+   * preference. It is the fifth field on this interface, which `RecordFileKind`
+   * warned would be the signal to check the abstraction is still describing what
+   * genuinely varies. It is: the two RPCs really do have different signatures.
+   */
+  acceptsDuration: boolean;
+  /**
    * What this domain accepts, which may be narrower than the bucket.
    *
    * The bucket is the real limit and permits PDFs; a *memory* takes
@@ -180,7 +225,21 @@ export const DOCUMENT_FILES: RecordFileKind = {
   filesTable: 'document_files',
   parentColumn: 'document_id',
   downloadNoun: 'document',
-  acceptedMimeTypes: ALLOWED_MIME_TYPES,
+  acceptsDuration: false,
+  /**
+   * Papers, not recordings.
+   *
+   * **Listed rather than pointing at `ALLOWED_MIME_TYPES`.** It did point there,
+   * and widening the bucket for voice notes in `20260819090000` silently widened
+   * documents too — a filing screen that would have accepted an `.m4a` because a
+   * *different* domain needed one. Caught by a test rather than on a device, but
+   * it is the same shape as every other "a previously impossible state became
+   * reachable" defect this project has paid for.
+   *
+   * A domain's list is its own. The bucket is the ceiling, and a test asserts no
+   * domain claims more than it.
+   */
+  acceptedMimeTypes: [...IMAGE_MIME_TYPES, 'application/pdf'],
 };
 
 export const MEMORY_FILES: RecordFileKind = {
@@ -190,8 +249,11 @@ export const MEMORY_FILES: RecordFileKind = {
   filesTable: 'memory_files',
   parentColumn: 'memory_id',
   downloadNoun: 'photo',
-  // Images only in PR-18. PR-19 adds audio here and to the bucket together.
-  acceptedMimeTypes: IMAGE_MIME_TYPES,
+  acceptsDuration: true,
+  // Photographs and voice notes. Widened here in the same PR that widened the
+  // bucket — `docs/18` §9 calls them two halves of one decision, and a test
+  // asserts the client list never claims more than the bucket accepts.
+  acceptedMimeTypes: [...IMAGE_MIME_TYPES, ...AUDIO_MIME_TYPES],
 };
 
 export interface UploadCandidate {
@@ -199,6 +261,15 @@ export interface UploadCandidate {
   mimeType: string;
   sizeBytes: number;
   originalFilename: string | null;
+  /**
+   * How long a recording runs, in whole seconds.
+   *
+   * Measured by the recorder at the moment it stops, not read back from the
+   * file — nothing in this stack decodes audio, and a duration the app invented
+   * would be worse than none. Absent for photographs, and null is an honest
+   * value for a recording whose length was never measured.
+   */
+  durationSeconds?: number | null;
 }
 
 /**
@@ -219,7 +290,11 @@ export function validateFile(
     // The sentence names what this record takes, not what the bucket permits.
     // Telling somebody attaching a photo to a memory that they may use a PDF
     // would be true of the bucket and false of the thing in front of them.
-    const wanted = accepted.includes('application/pdf') ? 'a photo or a PDF' : 'a photo';
+    const wanted = accepted.includes('application/pdf')
+      ? 'a photo or a PDF'
+      : accepted.includes('audio/mp4')
+        ? 'a photo or a recording'
+        : 'a photo';
     return { message: `That kind of file cannot be added yet. Use ${wanted}.` };
   }
   if (file.sizeBytes <= 0) {
@@ -323,6 +398,7 @@ export interface StorageGateway {
     mimeType: string;
     sizeBytes: number;
     originalFilename: string | null;
+    durationSeconds: number | null;
   }): Promise<GatewayResult<RecordFile>>;
   listFiles(recordId: string): Promise<GatewayResult<RecordFile[]>>;
   removeObject(path: string): Promise<{ error: { message: string } | null }>;
@@ -397,6 +473,7 @@ export async function uploadRecordFile(
     mimeType: candidate.mimeType,
     sizeBytes: candidate.sizeBytes,
     originalFilename: candidate.originalFilename,
+    durationSeconds: candidate.durationSeconds ?? null,
   });
   if (attached.error || !attached.data) {
     return {
@@ -507,7 +584,7 @@ export async function shareRecordFile(
 
   let localUri: string;
   try {
-    localUri = await download(minted.url, downloadFilenameFor(file));
+    localUri = await download(minted.url, downloadFilenameFor(file, gateway.kind.downloadNoun));
   } catch {
     return { ok: false, message: 'That file could not be downloaded. Try again.' };
   }
@@ -537,7 +614,10 @@ export async function shareRecordFile(
 export function downloadFilenameFor(file: RecordFile, noun = 'document'): string {
   if (file.originalFilename) return file.originalFilename;
   const extension = extensionFor(file.mimeType) ?? 'bin';
-  return `${noun}.${extension}`;
+  // A recording never has an original name — it was never a file on anybody's
+  // device before this app made it — and saving it as `photo.m4a` would be the
+  // kind of small lie that makes a share sheet confusing.
+  return `${isAudio(file.mimeType) ? 'voice-note' : noun}.${extension}`;
 }
 
 interface RecordFileRow {
@@ -638,13 +718,17 @@ export function createSupabaseStorageGateway(
       });
     },
 
-    async attachFile({ recordId, path, mimeType, sizeBytes, originalFilename }) {
+    async attachFile({ recordId, path, mimeType, sizeBytes, originalFilename, durationSeconds }) {
       const { data, error } = await client.rpc(kind.attachRpc, {
         [kind.parentParam]: recordId,
         object_path: path,
         file_mime_type: mimeType,
         file_size_bytes: sizeBytes,
         file_original_name: originalFilename,
+        // Only memories take a duration; the documents RPC has no such argument
+        // and PostgREST would refuse an unknown one, so it is sent only when the
+        // kind actually has somewhere to put it.
+        ...(kind.acceptsDuration ? { file_duration_seconds: durationSeconds } : {}),
       });
 
       const row = (data ?? null) as RecordFileRow | null;

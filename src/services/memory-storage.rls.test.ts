@@ -128,8 +128,36 @@ describeRls('memory storage', () => {
     });
   }
 
-  async function upload(client: SupabaseClient, path: string) {
-    return client.storage.from(BUCKET).upload(path, PIXEL, { contentType: 'image/jpeg' });
+  async function upload(
+    client: SupabaseClient,
+    path: string,
+    contentType = 'image/jpeg',
+  ) {
+    return client.storage.from(BUCKET).upload(path, PIXEL, { contentType });
+  }
+
+  /**
+   * The audio half of the happy path.
+   *
+   * The bytes are the same pixel — the bucket's allow-list checks the declared
+   * Content-Type, not the file's contents, so this exercises exactly the thing
+   * `20260819090000` changed without needing a real recording in the repository.
+   */
+  async function attachARecording(id = memoryId, seconds: number | null = 12): Promise<string> {
+    const { data: path, error } = await allocate(author, id, 'm4a');
+    if (error) throw error;
+    const uploaded = await upload(author, path as string, 'audio/mp4');
+    if (uploaded.error) throw uploaded.error;
+    const attached = await author.rpc('attach_memory_file', {
+      target_memory: id,
+      object_path: path as string,
+      file_mime_type: 'audio/mp4',
+      file_size_bytes: PIXEL.byteLength,
+      file_original_name: null,
+      file_duration_seconds: seconds,
+    });
+    if (attached.error) throw attached.error;
+    return path as string;
   }
 
   async function attach(client: SupabaseClient, id: string, path: string) {
@@ -502,5 +530,100 @@ describeRls('memory storage', () => {
 
     const memoryAllocate = await allocate(author, (doc as { id: string }).id);
     expect(memoryAllocate.error).not.toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Audio — the bucket and the client list are two halves of one decision
+  // -------------------------------------------------------------------------
+
+  it('accepts an audio/mp4 upload, which is the bucket half of the change', () => {
+    // If 20260819090000 were reverted or never applied, this is what fails —
+    // and it fails here rather than on a stream at the last step of a recording.
+    return expect(attachARecording()).resolves.toContain(`${familyId}/${memoryId}/`);
+  });
+
+  it('refuses a video upload, because video is deferred to Phase 12', async () => {
+    // The other half of the same decision: the allow-list gained audio and
+    // nothing else. docs/18 §3.3 — at a 10MB cap a video is fifteen seconds.
+    const { data: path } = await allocate(author, memoryId, 'mp4');
+    const { error } = await upload(author, path as string, 'video/mp4');
+    expect(error).not.toBeNull();
+  });
+
+  it('refuses an audio upload whose type the bucket does not list', async () => {
+    const { data: path } = await allocate(author, memoryId, 'mp3');
+    const { error } = await upload(author, path as string, 'audio/mpeg');
+    expect(error).not.toBeNull();
+  });
+
+  it('records the duration the recorder measured', async () => {
+    await attachARecording(memoryId, 42);
+
+    const { data } = await author
+      .from('memory_files')
+      .select('duration_seconds, mime_type')
+      .eq('memory_id', memoryId);
+
+    const row = (data as { duration_seconds: number; mime_type: string }[])[0];
+    expect(row.duration_seconds).toBe(42);
+    expect(row.mime_type).toBe('audio/mp4');
+  });
+
+  it('accepts a recording whose length was never measured', async () => {
+    // Null is honest: nothing in this stack decodes audio, and an invented
+    // duration would be worse than none.
+    await attachARecording(memoryId, null);
+
+    const { data } = await author
+      .from('memory_files')
+      .select('duration_seconds')
+      .eq('memory_id', memoryId);
+
+    expect((data as { duration_seconds: number | null }[])[0].duration_seconds).toBeNull();
+  });
+
+  it('lets another member hear a recording on a FAMILY memory', async () => {
+    // A recording obeys the same read predicate as a photograph, because
+    // can_read_memory_object never looks at mime_type.
+    const path = await attachARecording();
+
+    const { error } = await other.storage.from(BUCKET).download(path);
+    expect(error).toBeNull();
+  });
+
+  it('refuses another member a recording on a PRIVATE memory', async () => {
+    // The case that matters most for a voice note: a private recording is
+    // audible to nobody but its author.
+    const path = await attachARecording();
+    await setVisibility(memoryId, 'private');
+
+    const { error } = await other.storage.from(BUCKET).download(path);
+    expect(error).not.toBeNull();
+  });
+
+  it('refuses another member uploading a recording into a memory they can read', async () => {
+    // Writing never widens, whatever the media type.
+    const { error } = await allocate(other, memoryId, 'm4a');
+    expect(error).not.toBeNull();
+  });
+
+  it('keeps photographs and recordings on one memory, governed identically', async () => {
+    await attachAPhoto();
+    await attachARecording();
+
+    const { data } = await other
+      .from('memory_files')
+      .select('mime_type')
+      .eq('memory_id', memoryId);
+
+    const types = (data as { mime_type: string }[]).map((row) => row.mime_type).sort();
+    expect(types).toEqual(['audio/mp4', 'image/jpeg']);
+
+    await setVisibility(memoryId, 'private');
+    const { data: hidden } = await other
+      .from('memory_files')
+      .select('mime_type')
+      .eq('memory_id', memoryId);
+    expect(hidden ?? []).toEqual([]);
   });
 });

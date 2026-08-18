@@ -31,7 +31,14 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Family Knowledge Vault to use the microphone so you can record voice memories.",
+          "enableBackgroundRecording": false
+        }
+      ]
     ]
   }
 }
