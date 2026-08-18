@@ -16,6 +16,7 @@ import {
 import { Button } from '../../../../../src/components/Button';
 import { FileSourcePicker } from '../../../../../src/components/FileSourcePicker';
 import { ProgressBar } from '../../../../../src/components/ProgressBar';
+import { VoicePlayer, VoiceRecorder } from '../../../../../src/components/VoiceNote';
 import {
   MemoryAiConsentField,
   MemoryDateField,
@@ -58,7 +59,10 @@ import {
   MEMORY_FILES,
   createSupabaseStorageGateway,
   fileUrl,
+  isAudio,
+  isPreviewable,
   listRecordFiles,
+  removeRecordFile,
   uploadRecordFile,
   type RecordFile,
   type UploadCandidate,
@@ -210,7 +214,7 @@ export default function MemoryScreen() {
         render={(value) => <Text style={styles.story}>{value}</Text>}
       />
 
-      <Photographs memoryId={memory.id} canEdit={canEdit} />
+      <Attachments memoryId={memory.id} canEdit={canEdit} />
 
       <Field label="When">
         {canEdit ? (
@@ -509,17 +513,19 @@ function DateEditor({
 }
 
 /**
- * The photographs kept with a memory.
+ * What was kept with a memory: photographs to look at, and voice notes to hear.
  *
  * Owns its own state and its own load, exactly as the documents screen's
  * attachment list does — the parent screen is about the record, and a failed
  * upload must not blank the story somebody is reading.
  *
- * **A grid rather than a list.** A document's attachment is a thing you open; a
- * memory's is a thing you look at, and `docs/10` §4 asks this product to feel
- * like a family album rather than a file manager.
+ * **One list in the database, two presentations here.** Both are `memory_files`
+ * rows governed by the same policies; they are separated in the UI because a
+ * photograph is a thing you look at and a recording is a thing you play, and a
+ * grid of grey rectangles with play buttons would serve neither. `mime_type`
+ * decides which, via `isPreviewable` and `isAudio`.
  */
-function Photographs({ memoryId, canEdit }: { memoryId: string; canEdit: boolean }) {
+function Attachments({ memoryId, canEdit }: { memoryId: string; canEdit: boolean }) {
   const [files, setFiles] = useState<RecordFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState<{ index: number; total: number; fraction: number } | null>(
@@ -591,8 +597,11 @@ function Photographs({ memoryId, canEdit }: { memoryId: string; canEdit: boolean
     }
   }
 
+  const photos = files.filter((file) => isPreviewable(file.mimeType));
+  const voiceNotes = files.filter((file) => isAudio(file.mimeType));
+
   return (
-    <Field label={files.length === 1 ? '1 photo' : `${files.length} photos`}>
+    <Field label={describeAttachments(photos.length, voiceNotes.length)}>
       {loading ? <ActivityIndicator color={theme.colors.primary} /> : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -610,33 +619,144 @@ function Photographs({ memoryId, canEdit }: { memoryId: string; canEdit: boolean
 
       {!loading && files.length === 0 && !progress ? (
         <Text style={styles.empty}>
-          {canEdit ? 'No photographs yet.' : 'No photographs were added to this memory.'}
+          {canEdit ? 'Nothing added yet.' : 'Nothing was added to this memory.'}
         </Text>
       ) : null}
 
-      {files.length > 0 ? (
+      {photos.length > 0 ? (
         <View style={styles.grid}>
-          {files.map((file) => (
+          {photos.map((file) => (
             <Thumbnail key={file.id} memoryId={memoryId} file={file} />
           ))}
         </View>
       ) : null}
 
+      {voiceNotes.length > 0 ? (
+        <View style={styles.voiceList}>
+          {voiceNotes.map((file) => (
+            <VoiceNoteRow key={file.id} file={file} canEdit={canEdit} onChanged={load} onError={setError} />
+          ))}
+        </View>
+      ) : null}
+
       {canEdit ? (
-        <FileSourcePicker
-          label="Add photos"
-          multiple
-          imagesOnly
-          // Compressed on the way in. docs/18 §9 makes this a requirement: at
-          // 10MB a file against a ~1GB tier, uncompressed phone photographs are
-          // about a hundred pictures for every family that will ever exist.
-          quality={0.7}
-          onPicked={(candidates) => void attachAll(candidates)}
-          onError={setError}
-          disabled={progress !== null}
-        />
+        <>
+          <FileSourcePicker
+            label="Add photos"
+            multiple
+            imagesOnly
+            // Compressed on the way in. docs/18 §9 makes this a requirement: at
+            // 10MB a file against a ~1GB tier, uncompressed phone photographs are
+            // about a hundred pictures for every family that will ever exist.
+            quality={0.7}
+            onPicked={(candidates) => void attachAll(candidates)}
+            onError={setError}
+            disabled={progress !== null}
+          />
+          {/*
+            The recorder reports a candidate and uploads nothing, the same
+            contract FileSourcePicker has — so both arrive at `attachAll` and
+            there is one upload path rather than two.
+          */}
+          <VoiceRecorder
+            onRecorded={(candidate) => void attachAll([candidate])}
+            onError={setError}
+            disabled={progress !== null}
+          />
+        </>
       ) : null}
     </Field>
+  );
+}
+
+/** "3 photos and 1 voice note", or whichever half exists. */
+function describeAttachments(photos: number, voiceNotes: number): string {
+  const parts: string[] = [];
+  if (photos > 0) parts.push(photos === 1 ? '1 photo' : `${photos} photos`);
+  if (voiceNotes > 0) {
+    parts.push(voiceNotes === 1 ? '1 voice note' : `${voiceNotes} voice notes`);
+  }
+  return parts.length === 0 ? 'Photos and voice notes' : parts.join(' and ');
+}
+
+/**
+ * One voice note: a player, and a way for its author to remove it.
+ *
+ * Mints its own URL on mount and hands it to the player, which is given a URL
+ * and never learns that one can expire (`docs/17` §10.1). A voice note is
+ * usually short enough to outlast the 300-second TTL comfortably; a listener who
+ * leaves the screen open long enough for it to lapse gets a re-mint on the next
+ * load rather than a silent failure.
+ */
+function VoiceNoteRow({
+  file,
+  canEdit,
+  onChanged,
+  onError,
+}: {
+  file: RecordFile;
+  canEdit: boolean;
+  onChanged: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const gateway = createSupabaseStorageGateway(
+        getSupabase(),
+        { url: getSupabaseEnv().url },
+        MEMORY_FILES,
+      );
+      const minted = await fileUrl(gateway, file);
+      if (minted.ok) setUrl(minted.url);
+      else onError(minted.message);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file.id]);
+
+  function confirmRemove() {
+    Alert.alert('Remove this voice note?', 'The memory stays; only the recording goes.', [
+      { text: 'Keep it', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            const gateway = createSupabaseStorageGateway(
+              getSupabase(),
+              { url: getSupabaseEnv().url },
+              MEMORY_FILES,
+            );
+            const outcome = await removeRecordFile(gateway, file);
+            if (!outcome.ok) {
+              onError(outcome.message);
+              return;
+            }
+            onError(null);
+            await onChanged();
+          })();
+        },
+      },
+    ]);
+  }
+
+  return (
+    <View style={styles.voiceRow}>
+      <View style={styles.voicePlayer}>
+        <VoicePlayer url={url} durationSeconds={file.durationSeconds} />
+      </View>
+      {canEdit ? (
+        <Pressable
+          onPress={confirmRemove}
+          style={styles.voiceRemove}
+          accessibilityRole="button"
+          accessibilityLabel="Remove this voice note"
+        >
+          <Ionicons name="trash-outline" size={18} color={theme.colors.textMuted} />
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -794,6 +914,23 @@ const styles = StyleSheet.create({
   thumbImage: {
     width: '100%',
     height: '100%',
+  },
+  voiceList: {
+    gap: theme.spacing.sm,
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  voicePlayer: {
+    flex: 1,
+  },
+  voiceRemove: {
+    width: theme.touchTarget,
+    height: theme.touchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   actions: {
     flexDirection: 'row',

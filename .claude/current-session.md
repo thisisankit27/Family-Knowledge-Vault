@@ -2560,3 +2560,96 @@ regardless. Recorded as a hardening item for Phase 10's Security Center, not act
 **PR-19 — Voice Memories.** `npx expo install expo-audio` (not `expo-av`, which is removed in SDK
 55). Widen the bucket's `allowed_mime_types` and `MEMORY_FILES.acceptedMimeTypes` together — they are
 two halves of one decision and drifting them apart is how the first upload fails on a stream.
+
+---
+---
+
+# PR-19 Complete — Voice Memories (2026-08-19)
+
+**544 CI tests (was 538) · 308 RLS tests (was 299) · eighteen migrations.**
+
+Record a voice note into a memory and play it back. `expo-audio ~1.1.1`, included in Expo Go, so
+the demo needed no dev build.
+
+## The whole database change is one array
+
+`20260819090000_memories_can_be_heard.sql` updates `storage.buckets.allowed_mime_types` and does
+nothing else. **No table, no function, no policy, no edit to `can_see_record`.** A voice note is a
+`memory_files` row like a photograph, through the same allocator, the same attach RPC and the same
+two predicates — `kind` describes an object's *role* (a recording is an `original`), and the media
+type lives in `mime_type` where the bucket already checks it.
+
+That is the evidence `docs/18` §3.1 and §5.2 were right, and it is worth recording that the cheapest
+migration in the project so far is the one that would have been most expensive if the earlier shape
+were wrong.
+
+## The defect this PR found in itself
+
+**Widening the bucket silently widened documents.** `DOCUMENT_FILES.acceptedMimeTypes` pointed at
+`ALLOWED_MIME_TYPES`, so the moment audio joined the bucket for memories, the *document filing
+screen* would have accepted an `.m4a`.
+
+Caught by a test written in the same commit — *"lets a memory take a recording and a document refuse
+one"* — not on a device. It is the same shape as every other "a previously impossible state became
+reachable" defect this project has paid for, arriving from a new direction: **a shared constant that
+was correct while only one caller existed.**
+
+The fix is that a domain's list is its own, and the bucket is only the ceiling. There is a test
+asserting no domain claims more than the bucket accepts.
+
+## What the roadmap got wrong, again
+
+`docs/14` said "Voice via Expo AV". `expo-av` is unmaintained from SDK 54 and **removed in SDK 55**,
+and this app pins `~54.0.0` — corrected in `docs/18` §7.1 before PR-17 and honoured here.
+
+Two smaller corrections found by reading the **installed package** rather than the docs page:
+`requestRecordingPermissionsAsync` is a direct export, not `AudioModule.*`; and
+`useAudioRecorderState` is what supplies both the elapsed time and `mediaServicesDidReset`, which is
+the signal the "interrupted by a call" case actually needs. Both are now amended in §7.1 in place.
+
+## Decisions
+
+- **Five-minute cap, enforced in the recorder.** HIGH_QUALITY is 128 kbit/s, so the 10MB bucket
+  limit is about ten minutes; five lands near 4.8MB. Capped where the recording happens rather than
+  discovered at upload — failing after somebody has told a story is the worst moment to mention a
+  size limit.
+- **Duration is measured, never inferred.** Nothing in this stack decodes audio, so the recorder
+  reports what it counted and `null` is an honest value. There is an RLS test for the null case.
+- **Two MIME types for one format.** `audio/mp4` is canonical and is what the app sends; `audio/m4a`
+  is what other tools emit for identical bytes. Both map to the `m4a` extension.
+- **The audio session is set at the point of use.** iOS needs `allowsRecording` while recording and
+  refuses playback through the silent switch without `playsInSilentMode` — a family listening to a
+  grandparent's story with the ringer off is the normal case. Recording mode is turned back off
+  afterwards, or playback routes to the earpiece rather than the speaker.
+- **Background recording is off** in the config plugin. A vault that keeps listening after you leave
+  the screen is the opposite of what this product promises; leaving the screen mid-recording stops
+  and discards.
+- **Playback progress stayed**, though `docs/18` §9 made it the cut line — `useAudioPlayerStatus`
+  already reports `currentTime` and `duration`, so the bar is a division rather than a feature.
+
+## §13.6 constraints, honoured
+
+Nothing here touches ownership. `provider_file_id` stays opaque, every read predicate still resolves
+through `can_see_record` (which never looks at `mime_type`, so a recording is governed exactly as a
+photograph is), nothing is destructive on a membership change, and `created_by` is untouched.
+
+The §13.6 note for this PR warned that a voice memory is the content most obviously *authored by a
+person* — a grandparent's recorded story — and that the intuition must not become a second ownership
+rule in code. It has not: there is no audio-specific permission anywhere.
+
+## Open items
+
+- **Not yet demonstrated on a device.** Recording, the cap, permission refusal, interruption and
+  playback all need hardware.
+- **No transcription, no waveform, no background recording, no streaming.** Unchanged from
+  `docs/18` §11 — none is required by an FR.
+- **128 kbit/s stereo is generous for speech.** A voice-tuned preset would cut storage several-fold
+  and is a config change affecting only new recordings, so it is safely deferrable — noted for
+  Phase 12's Storage Management rather than guessed at now.
+- `memory_members` still has no interface. **PR-20 is the last chance before the phase closes.**
+- Memories still absent from the activity feed.
+
+## Next
+
+**PR-20 — Albums**, the last PR of Phase 4. Then the **Content Ownership & Family Lifecycle review**
+(`docs/18` §13.5) before Phase 5, and the landing-page update that closes the phase.

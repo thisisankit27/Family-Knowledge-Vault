@@ -412,10 +412,30 @@ Adopting it would mean writing code with a published removal date, one SDK ahead
 ```ts
 useAudioRecorder(RecordingPresets.HIGH_QUALITY)
   → prepareToRecordAsync() → record() → stop() → recorder.uri
+useAudioRecorderState(recorder, 250)  // canRecord, isRecording, durationMillis, mediaServicesDidReset
 useAudioPlayer(source) + useAudioPlayerStatus(player)   // isLoaded, playing, duration, currentTime
-AudioModule.requestRecordingPermissionsAsync()
+requestRecordingPermissionsAsync()
 setAudioModeAsync({ allowsRecording, playsInSilentMode })
 ```
+
+> **Corrected 2026-08-19, while building PR-19.** Two things above were written
+> from the documentation and checked against the installed package only when the
+> code was written.
+>
+> `requestRecordingPermissionsAsync` is a **direct export of `expo-audio`**, not
+> `AudioModule.requestRecordingPermissionsAsync` as this section first said.
+>
+> And `useAudioRecorderState` is what supplies the elapsed time — the recorder
+> object exposes `currentTime`, but the hook is what re-renders on it, and it
+> also carries **`mediaServicesDidReset`**, which is the platform saying a call
+> or the OS took the microphone away. That is the signal the "recording
+> interrupted" edge case below actually needs; without it the timer keeps
+> counting against a recorder that has stopped existing.
+>
+> Installed version: `expo-audio ~1.1.1` on SDK 54. `RecordingPresets.HIGH_QUALITY`
+> writes `.m4a` — MPEG-4 container, AAC — on **both** platforms at 128 kbit/s,
+> which is where the five-minute cap's arithmetic comes from: ten megabytes is
+> about ten minutes, so five lands near 4.8MB.
 
 Install with `npx expo install expo-audio`, which resolves against the pin rather than latest —
 `docs/16` §8's rule, and the reason `base64-arraybuffer` turned out to be unnecessary.

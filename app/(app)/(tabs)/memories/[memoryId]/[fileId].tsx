@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 import { Button } from '../../../../../src/components/Button';
+import { VoicePlayer } from '../../../../../src/components/VoiceNote';
 import { getSupabaseEnv } from '../../../../../src/lib/env';
 import { formatRelativeTime } from '../../../../../src/lib/relativeTime';
 import { getSupabase } from '../../../../../src/lib/supabase';
@@ -32,6 +33,7 @@ import {
   downloadFilenameFor,
   fileUrl,
   formatBytes,
+  isAudio,
   listRecordFiles,
   removeRecordFile,
   shareRecordFile,
@@ -201,6 +203,15 @@ export default function MemoryPhotoScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
+        {/*
+          Voice notes normally play inline on the memory screen and never route
+          here. This branch exists so a hand-typed or stale link lands on a
+          player rather than on a blank frame trying to render audio as a
+          picture — a broken state nobody would understand.
+        */}
+        {isAudio(file.mimeType) ? (
+          <VoicePlayer url={url} durationSeconds={file.durationSeconds} />
+        ) : (
         <View style={styles.frame}>
           {url ? (
             <Image
@@ -223,6 +234,7 @@ export default function MemoryPhotoScreen() {
             <ActivityIndicator color={theme.colors.primary} />
           )}
         </View>
+        )}
 
         <Text style={styles.meta}>
           {formatBytes(file.sizeBytes)} · added {formatRelativeTime(file.createdAt)}

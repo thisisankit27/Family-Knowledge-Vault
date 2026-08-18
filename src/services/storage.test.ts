@@ -15,9 +15,11 @@ import {
   uploadRecordFile,
   validateFile,
   type RecordFile,
+  AUDIO_MIME_TYPES,
   DOCUMENT_FILES,
   IMAGE_MIME_TYPES,
   MEMORY_FILES,
+  isAudio,
   type StorageGateway,
   type UploadCandidate,
 } from './storage';
@@ -78,13 +80,19 @@ function fakeGateway(overrides: Partial<StorageGateway> = {}): StorageGateway {
 const readBytes = async () => new Uint8Array([1, 2, 3]);
 
 describe('the allow-list mirrors the bucket', () => {
-  it('is the five types the migration configured', () => {
+  it('is the seven types the migrations configured, audio included', () => {
+    // This list and `storage.buckets.allowed_mime_types` are two halves of one
+    // decision (20260819090000). If this test fails, check whether the migration
+    // moved too — a client list wider than the bucket makes the refusal arrive
+    // after a whole upload instead of before it.
     expect(ALLOWED_MIME_TYPES).toEqual([
       'image/jpeg',
       'image/png',
       'image/heic',
       'image/webp',
       'application/pdf',
+      'audio/mp4',
+      'audio/m4a',
     ]);
   });
 
@@ -94,13 +102,24 @@ describe('the allow-list mirrors the bucket', () => {
     }
   });
 
-  it('refuses anything else', () => {
-    // The interesting ones are plausible rather than absurd: a phone will offer
-    // all three, and Phase 4 is where audio and video become allowed.
-    for (const mime of ['image/gif', 'video/mp4', 'audio/m4a', 'text/plain', 'application/zip']) {
+  it('refuses anything else, and video in particular', () => {
+    // The interesting ones are plausible rather than absurd: a phone offers all
+    // of these. **Video stays refused on purpose** — docs/18 §3.3 defers it to
+    // Phase 12 with the 10MB cap it depends on, since at that cap a video is
+    // about fifteen seconds. If this line ever passes, that decision changed.
+    for (const mime of ['image/gif', 'video/mp4', 'video/quicktime', 'text/plain', 'application/zip']) {
       expect(isAllowedMimeType(mime)).toBe(false);
       expect(extensionFor(mime)).toBeNull();
     }
+  });
+
+  it('accepts what the recorder actually produces', () => {
+    // expo-audio's HIGH_QUALITY preset writes .m4a on both platforms, and this
+    // app sends `audio/mp4` for it. Both map to the same extension.
+    expect(isAllowedMimeType('audio/mp4')).toBe(true);
+    expect(isAllowedMimeType('audio/m4a')).toBe(true);
+    expect(extensionFor('audio/mp4')).toBe('m4a');
+    expect(extensionFor('audio/m4a')).toBe('m4a');
   });
 
   it('never takes the extension from a filename', () => {
@@ -620,9 +639,42 @@ describe('record file kinds', () => {
     expect(validateFile({ mimeType: 'application/pdf', sizeBytes: 1000 })).toBeNull();
   });
 
-  it('derives the image list from the bucket rather than restating it', () => {
+  it('keeps the image list to things that actually render', () => {
+    // Listed rather than derived by exclusion. `filter(t => t !== 'application/pdf')`
+    // was right while PDFs were the only non-image and silently wrong the moment
+    // audio joined — it would have put voice notes in the photo grid.
+    for (const mimeType of IMAGE_MIME_TYPES) {
+      expect(isAllowedMimeType(mimeType)).toBe(true);
+      expect(isPreviewable(mimeType)).toBe(true);
+      expect(isAudio(mimeType)).toBe(false);
+    }
     expect(IMAGE_MIME_TYPES).not.toContain('application/pdf');
-    expect(IMAGE_MIME_TYPES.length).toBe(ALLOWED_MIME_TYPES.length - 1);
+  });
+
+  it('never calls a recording previewable, so it cannot reach the photo grid', () => {
+    for (const mimeType of AUDIO_MIME_TYPES) {
+      expect(isAllowedMimeType(mimeType)).toBe(true);
+      expect(isAudio(mimeType)).toBe(true);
+      expect(isPreviewable(mimeType)).toBe(false);
+    }
+  });
+
+  it('lets a memory take a recording and a document refuse one', () => {
+    // The widening that had to happen in the same PR as the bucket's.
+    expect(MEMORY_FILES.acceptedMimeTypes).toContain('audio/mp4');
+    expect(DOCUMENT_FILES.acceptedMimeTypes).not.toContain('audio/mp4');
+
+    expect(validateFile({ mimeType: 'audio/mp4', sizeBytes: 1000 }, MEMORY_FILES.acceptedMimeTypes)).toBeNull();
+    expect(
+      validateFile({ mimeType: 'audio/mp4', sizeBytes: 1000 }, DOCUMENT_FILES.acceptedMimeTypes),
+    ).not.toBeNull();
+  });
+
+  it('only sends a duration to the RPC that declares one', () => {
+    // PostgREST refuses an argument a function does not have, so this is a fact
+    // about the two signatures rather than a preference.
+    expect(MEMORY_FILES.acceptsDuration).toBe(true);
+    expect(DOCUMENT_FILES.acceptsDuration).toBe(false);
   });
 
   it('checks the kind the gateway carries, not one the caller passes separately', async () => {
