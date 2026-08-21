@@ -211,6 +211,13 @@ export interface MemoryGateway {
   ): Promise<{ error: { message: string } | null }>;
   archiveMemory(memoryId: string, archived: boolean): Promise<{ error: { message: string } | null }>;
   deleteMemory(memoryId: string): Promise<{ error: { message: string } | null }>;
+  listPeople(memoryId: string): Promise<GatewayResult<string[]>>;
+  linkPerson(input: {
+    memoryId: string;
+    memberId: string;
+    familyId: string;
+  }): Promise<{ error: { message: string } | null }>;
+  unlinkPerson(memoryId: string, memberId: string): Promise<{ error: { message: string } | null }>;
 }
 
 export type MemoryOutcome = { ok: true; memory: FamilyMemory } | { ok: false; message: string };
@@ -364,6 +371,12 @@ export function describeMemoryError(message: string): string {
   }
   if (normalised.includes('memories_ai_processing_check')) {
     return 'That privacy setting is not recognised.';
+  }
+  if (normalised.includes('memory_members_pkey') || normalised.includes('duplicate key')) {
+    return 'That person is already named on this memory.';
+  }
+  if (normalised.includes('memory_members_member_id_family_id_fkey')) {
+    return 'That person is no longer in this family.';
   }
   if (normalised.includes('memories_member_id_family_id_fkey')) {
     // The subject left the family between opening the form and submitting it.
@@ -612,6 +625,70 @@ export async function deleteMemory(
   const { error } = await gateway.deleteMemory(memoryId);
   if (error) return { ok: false, message: describeMemoryError(error.message) };
   return { ok: true };
+}
+
+/**
+ * Who else was there.
+ *
+ * `memory_members` shipped in PR-17 with policies and RLS tests and **no way to
+ * reach it** — the sixth time this project would have closed a phase with a
+ * capability only its tests could exercise, and the reason PR-20 gives it an
+ * interface rather than letting Phase 4 end that way.
+ *
+ * **These links grant nothing, and that is the whole point of the table.**
+ * `memories.member_id` is the *subject* — one person, the one the memory is
+ * chiefly about — and neither it nor these links appear in any permission
+ * decision, because every memories policy passes `null` in `can_see_record`'s
+ * subject position (`docs/18` §3.4). Naming somebody here is a label for
+ * finding the memory later, not a share.
+ *
+ * If a link ever granted read, any member could insert a row naming themselves
+ * against a private memory and read it — a privilege escalation needing no
+ * interface at all, which is precisely why the table's header comment says so
+ * and why the RLS suite has a test called *"does not let a link make a private
+ * memory readable"*.
+ */
+export async function listMemoryPeople(
+  gateway: MemoryGateway,
+  memoryId: string,
+): Promise<{ ok: true; memberIds: string[] } | { ok: false; message: string }> {
+  const { data, error } = await gateway.listPeople(memoryId);
+  if (error) return { ok: false, message: describeMemoryError(error.message) };
+  return { ok: true, memberIds: data ?? [] };
+}
+
+export async function linkMemoryPerson(
+  gateway: MemoryGateway,
+  input: { memoryId: string; memberId: string; familyId: string },
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { error } = await gateway.linkPerson(input);
+  if (error) return { ok: false, message: describeMemoryError(error.message) };
+  return { ok: true };
+}
+
+export async function unlinkMemoryPerson(
+  gateway: MemoryGateway,
+  memoryId: string,
+  memberId: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { error } = await gateway.unlinkPerson(memoryId, memberId);
+  if (error) return { ok: false, message: describeMemoryError(error.message) };
+  return { ok: true };
+}
+
+/**
+ * Who was there, in the words the family uses.
+ *
+ * Deliberately excludes the subject: the screen shows "Who it is about"
+ * separately, and repeating that person in "Who else was there" would make one
+ * fact look like two.
+ */
+export function describeMemoryPeople(
+  memberIds: string[],
+  peopleById: Map<string, string>,
+): string {
+  if (memberIds.length === 0) return 'Nobody else named';
+  return memberIds.map((id) => peopleById.get(id) ?? 'Someone in this family').join(', ');
 }
 
 /** Active and archived, in one pass, order preserved. */
@@ -876,6 +953,34 @@ export function createSupabaseMemoryGateway(client: SupabaseClient): MemoryGatew
     // five times. Same standing gap as `documents`.
     async deleteMemory(memoryId) {
       const { error } = await client.from('memories').delete().eq('id', memoryId);
+      return { error };
+    },
+
+    async listPeople(memoryId) {
+      const { data, error } = await client
+        .from('memory_members')
+        .select('member_id')
+        .eq('memory_id', memoryId)
+        .returns<{ member_id: string }[]>();
+
+      return { data: data ? data.map((row) => row.member_id) : null, error };
+    },
+
+    async linkPerson({ memoryId, memberId, familyId }) {
+      const { error } = await client
+        .from('memory_members')
+        .insert({ memory_id: memoryId, member_id: memberId, family_id: familyId });
+
+      return { error };
+    },
+
+    async unlinkPerson(memoryId, memberId) {
+      const { error } = await client
+        .from('memory_members')
+        .delete()
+        .eq('memory_id', memoryId)
+        .eq('member_id', memberId);
+
       return { error };
     },
   };

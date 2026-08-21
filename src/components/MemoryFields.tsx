@@ -187,6 +187,91 @@ export function MemorySubjectField({
 }
 
 /**
+ * Who else was there — a multi-select label, and nothing more.
+ *
+ * **A separate control from "Who it is about", and separate on purpose.** The
+ * subject is one person on the record spine; this is everybody else, in
+ * `memory_members`. They answer different questions ("whose memory is this"
+ * versus "who was in it") and the schema keeps them apart, so the screen does
+ * too — collapsing them would be the same conflation `20260810090000` closed.
+ *
+ * **Neither grants anything.** Every memories policy passes `null` in
+ * `can_see_record`'s subject position, so naming somebody here is how the
+ * memory gets found later, not how it gets shared. The sentence underneath says
+ * so, because the last time a field like this was ambiguous it cost a privilege
+ * escalation.
+ *
+ * A multi-select rather than `ChipGroup`, which is single-select by contract.
+ * Not folded into it: `ChipGroup`'s "re-tapping the active option clears it"
+ * rule is exactly wrong for a set, and a `multiple` flag would make one
+ * component answer two questions.
+ */
+export function MemoryPeopleField({
+  value,
+  people,
+  subjectId,
+  onToggle,
+  readOnly,
+}: {
+  value: Set<string>;
+  people: { id: string; displayName: string }[];
+  /** The subject, offered separately above and omitted here. */
+  subjectId: string | null;
+  onToggle: (memberId: string, next: boolean) => void;
+  readOnly?: boolean;
+}) {
+  // The subject is already named in its own field; offering them twice would
+  // make one fact look like two, and a reader would reasonably wonder which.
+  const others = people.filter((person) => person.id !== subjectId);
+
+  if (readOnly) {
+    const named = others.filter((person) => value.has(person.id));
+    return (
+      <>
+        <Text style={styles.value}>
+          {named.length === 0
+            ? 'Nobody else named'
+            : named.map((person) => person.displayName).join(', ')}
+        </Text>
+        <Text style={styles.hint}>Just labels. They do not change who can open this.</Text>
+      </>
+    );
+  }
+
+  if (others.length === 0) {
+    return <Text style={styles.hint}>There is nobody else in this family yet.</Text>;
+  }
+
+  return (
+    <>
+      <View style={styles.peopleRow}>
+        {others.map((person) => {
+          const active = value.has(person.id);
+          return (
+            <Pressable
+              key={person.id}
+              onPress={() => onToggle(person.id, !active)}
+              style={[styles.personChip, active ? styles.personChipActive : null]}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: active }}
+              accessibilityLabel={person.displayName}
+            >
+              {active ? (
+                <Ionicons name="checkmark" size={14} color={theme.colors.primary} />
+              ) : null}
+              <Text style={[styles.personText, active ? styles.personTextActive : null]}>
+                {person.displayName}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.hint}>Just labels. They do not change who can open this.</Text>
+    </>
+  );
+}
+
+/**
  * Whether AI may read this memory.
  *
  * Two presentations, and which one you get depends on whether the decision is
@@ -261,5 +346,34 @@ const styles = StyleSheet.create({
   },
   toggleText: {
     flex: 1,
+  },
+  peopleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
+  },
+  personChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  personChipActive: {
+    backgroundColor: theme.colors.primarySoft,
+    borderColor: theme.colors.primary,
+  },
+  personText: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.caption,
+  },
+  personTextActive: {
+    color: theme.colors.primary,
+    fontWeight: '600',
   },
 });

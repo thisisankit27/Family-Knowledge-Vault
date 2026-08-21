@@ -25,6 +25,10 @@ import {
   setMemoryLocation,
   setMemoryStory,
   setMemoryVisibility,
+  describeMemoryPeople,
+  linkMemoryPerson,
+  listMemoryPeople,
+  unlinkMemoryPerson,
   validateLocation,
   validateMemoryTitle,
   validateStory,
@@ -89,6 +93,15 @@ function fakeGateway(overrides: Partial<MemoryGateway> = {}): MemoryGateway {
       return { error: null };
     },
     async deleteMemory() {
+      return { error: null };
+    },
+    async listPeople() {
+      return { data: [], error: null };
+    },
+    async linkPerson() {
+      return { error: null };
+    },
+    async unlinkPerson() {
       return { error: null };
     },
     ...overrides,
@@ -649,5 +662,97 @@ describe('the lines under a memory’s title', () => {
   it('degrades to "Someone" when the account is gone, rather than showing an id', () => {
     expect(describeMemoryAuthor(memory({ createdBy: null }), [], 'user-2')).toBe('Someone');
     expect(describeMemoryAuthor(memory({ createdBy: 'ghost' }), [], 'user-2')).toBe('Someone');
+  });
+});
+
+describe('who else was there', () => {
+  it('returns the linked people, and an empty list is not a failure', async () => {
+    const listed = await listMemoryPeople(
+      fakeGateway({
+        async listPeople() {
+          return { data: ['person-1', 'person-2'], error: null };
+        },
+      }),
+      'memory-1',
+    );
+
+    expect(listed).toEqual({ ok: true, memberIds: ['person-1', 'person-2'] });
+    expect(await listMemoryPeople(fakeGateway(), 'memory-1')).toEqual({ ok: true, memberIds: [] });
+  });
+
+  it('sends the family with the link, because the row carries the tenant', async () => {
+    let received: { memoryId: string; memberId: string; familyId: string } | null = null;
+    await linkMemoryPerson(
+      fakeGateway({
+        async linkPerson(input) {
+          received = input;
+          return { error: null };
+        },
+      }),
+      { memoryId: 'memory-1', memberId: 'person-1', familyId: 'family-1' },
+    );
+
+    expect(received).toEqual({
+      memoryId: 'memory-1',
+      memberId: 'person-1',
+      familyId: 'family-1',
+    });
+  });
+
+  it('names the duplicate rather than showing a primary key', async () => {
+    const outcome = await linkMemoryPerson(
+      fakeGateway({
+        async linkPerson() {
+          return { error: { message: 'duplicate key value violates unique constraint' } };
+        },
+      }),
+      { memoryId: 'memory-1', memberId: 'person-1', familyId: 'family-1' },
+    );
+
+    expect(outcome).toEqual({ ok: false, message: 'That person is already named on this memory.' });
+  });
+
+  it('unlinks without touching the memory', async () => {
+    // There is no path from here to the memory itself, which is the whole
+    // reason these are separate rows: naming somebody is metadata, not a write
+    // to the record they are named on.
+    let memoryDeleted = false;
+    const outcome = await unlinkMemoryPerson(
+      fakeGateway({
+        async deleteMemory() {
+          memoryDeleted = true;
+          return { error: null };
+        },
+      }),
+      'memory-1',
+      'person-1',
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(memoryDeleted).toBe(false);
+  });
+
+  it('reads a refusal as a refusal, not as nobody being there', async () => {
+    const outcome = await listMemoryPeople(
+      fakeGateway({
+        async listPeople() {
+          return { data: null, error: { message: 'permission denied for table memory_members' } };
+        },
+      }),
+      'memory-1',
+    );
+
+    expect(outcome).toEqual({ ok: false, message: 'You do not have permission to do that.' });
+  });
+
+  it('names the people, and says so plainly when there are none', () => {
+    const people = new Map([
+      ['person-1', 'Nani'],
+      ['person-2', 'Dad'],
+    ]);
+
+    expect(describeMemoryPeople(['person-1', 'person-2'], people)).toBe('Nani, Dad');
+    expect(describeMemoryPeople([], people)).toBe('Nobody else named');
+    expect(describeMemoryPeople(['ghost'], people)).toBe('Someone in this family');
   });
 });

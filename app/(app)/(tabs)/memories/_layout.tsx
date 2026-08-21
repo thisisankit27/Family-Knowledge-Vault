@@ -26,6 +26,13 @@ export default function MemoriesLayout() {
       {/* A modal, matching `documents/new`. Keeping a memory is a self-contained
           act with a clear end, and a modal is the shape that says so. */}
       <Stack.Screen name="new" options={{ title: 'Keep a memory', presentation: 'modal' }} />
+      <Stack.Screen name="albums/index" options={{ title: 'Albums' }} />
+      <Stack.Screen
+        name="albums/new"
+        options={{ title: 'Make an album', presentation: 'modal' }}
+      />
+      {/* Sets its own title to the album's name. */}
+      <Stack.Screen name="albums/[albumId]" />
       <Stack.Screen name="[memoryId]/index" options={{ title: 'Memory' }} />
       {/* The viewer sets its own title to the memory's name, the way the
           documents viewer sets the file's. A generic "Photo" would say less
