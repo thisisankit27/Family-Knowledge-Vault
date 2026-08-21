@@ -2752,3 +2752,56 @@ involved. Nothing destructive on membership change; `created_by` pinned by trigg
    whatever the answer turns out to be.
 2. **The landing-page update**, which `CLAUDE.md` makes the last act of every phase — and
    `src/navigation/domains.ts` sets `memories.arrivesIn` to `'Shipped'` at the same time.
+
+---
+---
+
+# Phase 4 closed — the landing page (2026-08-21)
+
+**No app logic.** `CLAUDE.md` makes the landing-page update the last act of every phase, and this is
+Phase 4's. Sequenced before the Content Ownership review at the product owner's instruction.
+
+## The four edits
+
+| | |
+|---|---|
+| **Stats** | 29 → **35** merged, 712 → **912** tests (581 CI + 331 RLS), 12 phases unchanged |
+| **What works today** | Ten memory capabilities added — keeping one, date precision, browsing by year, naming who else was there, photographs, voice notes, sharing, archiving, albums |
+| **What does not work yet** | Six Phase 4 gaps added; the stale *"memories are empty"* line corrected |
+| **Phase list** | Phase 4 → `shipped`, Phase 5 → `building`, status line → *Phase 5, Family Health* |
+
+**The count is 35 rather than 34.** Thirty-four are merged now; the stats comment states the
+convention — this page's own pull request is included, because it is merged by the time anybody
+reads the number. A reader clicking through to the merged list sees 35.
+
+## Three stale claims found while checking, not in the checklist
+
+The four edits `CLAUDE.md` names were not the whole job:
+
+- **`<h2>Phases 1, 2 and 3 have shipped.</h2>`** — the section's own heading, which no bullet in the
+  ritual covers.
+- **The Memories feature card promised video.** Harmless while Memories read as unbuilt; misleading
+  the moment the page marks it shipped. Now says what ships and that video comes later.
+- **`domains.ts`'s memories summary said "Photos, videos, voice notes"** — and that string is the
+  **subtitle on the Memories screen itself**, not just documentation. The landing page's honesty
+  standard does not stop at the landing page. Corrected, with `arrivesIn` → `'Shipped'`.
+
+Worth adding to the ritual: **grep the page for the phase number and for every capability word before
+committing**, because the four listed edits are where the numbers live and not where the prose does.
+
+## Verified
+
+- 581 CI tests pass. HTML tag balance checked programmatically.
+- **The RLS suite failed 331/331 on the first run**, which was the Docker stack being down rather
+  than a regression — `npx supabase start`, then 331/331 passed. Worth remembering: a total failure
+  of that suite is almost always the environment, and the first thing to check is whether the
+  containers are running at all, before the LAN IP.
+- Not yet viewed at 1280px and 390px in both colour schemes — `CLAUDE.md` asks for that and it needs
+  a browser.
+
+## Next
+
+**Phase 4 is closed.** The **Content Ownership & Family Lifecycle review** (`docs/18` §13.5) comes
+before Phase 5 begins, because `docs/14` §7 has Medical reusing the Documents pattern almost
+directly and it will inherit whatever the current answer is — which today is *"content belongs to
+the family"*, arrived at by default rather than by decision.

@@ -96,11 +96,12 @@ export const TAB_DOMAINS: Domain[] = [
     id: 'memories',
     label: 'Memories',
     icon: 'images-outline',
-    summary: 'Photos, videos, voice notes, and written stories',
-    // PR-17 shipped memories themselves; photographs, voice and albums are
-    // PR-18 to PR-20. Still 'Phase 4' because the phase is where it *gets
-    // built*, and the phase is not finished. Becomes 'Shipped' at PR-20.
-    arrivesIn: 'Phase 4',
+    // Not "videos": this string is the subtitle on the Memories screen, and
+    // video was deferred to Phase 12 with the file-size cap it depends on.
+    // The landing page carries an honesty standard and a screen is no different.
+    summary: 'Photographs, voice notes, and the stories behind them',
+    // Shipped: PR-17 memories, PR-18 photographs, PR-19 voice, PR-20 albums.
+    arrivesIn: 'Shipped',
   },
 ];
 

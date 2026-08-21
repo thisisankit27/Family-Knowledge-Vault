@@ -134,8 +134,8 @@
             <span class="icon" aria-hidden="true">📸</span>
             <h3>Memories</h3>
             <p>
-              Photos, videos, voice notes, and written stories, arranged along the
-              timeline of your family's life.
+              Photographs, voice notes and written stories, gathered into albums
+              and set against the year they happened. Video comes later.
             </p>
           </article>
           <article class="card">
@@ -204,7 +204,7 @@
       -->
       <section class="section wrap" id="progress">
         <p class="eyebrow">Progress</p>
-        <h2>Phases 1, 2 and 3 have shipped.</h2>
+        <h2>Phases 1 to 4 have shipped.</h2>
         <p class="prose">
           This is not a landing page for something that might get built. Every
           claim below corresponds to merged code you can read right now — and
@@ -216,9 +216,9 @@
           "Pull requests" is the count in the linked merged list; "tests" is
           `npm test` plus the row-level-security suite.
 
-          Updated at the close of Phase 3: 29 merged (this page's own pull
+          Updated at the close of Phase 4: 35 merged (this page's own pull
           request included, since it is merged by the time anybody reads this),
-          712 tests = 472 CI + 240 row-level-security.
+          912 tests = 581 CI + 331 row-level-security.
 
           It says 29 rather than 28 because Phase 3 cost one extra pull request
           to bookkeeping. PR-15b and PR-16 were raised as a stack — each based on
@@ -233,11 +233,11 @@
         -->
         <ul class="stats">
           <li>
-            <strong>29</strong>
+            <strong>35</strong>
             <span>pull requests merged</span>
           </li>
           <li>
-            <strong>712</strong>
+            <strong>912</strong>
             <span>automated tests</span>
           </li>
           <li>
@@ -281,6 +281,35 @@
               </li>
               <li>Rename a document, move it to another shelf, or reassign it</li>
               <li>Archive a document, bring it back, or delete it for good</li>
+
+              <li>
+                Keep a memory — what happened, the story behind it, where it
+                was, who it is about, and who may see it
+              </li>
+              <li>
+                Say when it happened as precisely as you actually remember — a
+                day, a month, a year, or not at all
+              </li>
+              <li>
+                Browse memories gathered under the year they happened, with the
+                undated ones at the end
+              </li>
+              <li>Name who else was there</li>
+              <li>Attach photographs to a memory, several at once</li>
+              <li>Open a photograph full screen, or send it out of the app</li>
+              <li>
+                Record a voice note straight into a memory, up to five minutes,
+                and play it back
+              </li>
+              <li>
+                Keep a memory to yourself, or share it with everyone in the
+                family — and change your mind either way
+              </li>
+              <li>Archive a memory, bring it back, or delete it for good</li>
+              <li>
+                Gather memories into an album, and browse it — including
+                memories somebody else in the family wrote
+              </li>
             </ul>
           </div>
 
@@ -296,9 +325,9 @@
                 proves you own the address you signed up with.
               </li>
               <li>
-                <strong>Medical records, memories and recipes are empty.</strong>
-                The sections exist; the features are Phases 4 to 6. Documents
-                work — they were Phase 3.
+                <strong>Medical records and recipes are empty.</strong>
+                The sections exist; the features are Phases 5 and 6. Documents
+                and memories work — they were Phases 3 and 4.
               </li>
               <li>
                 <strong>The "let AI read this" switch does nothing yet.</strong>
@@ -306,6 +335,38 @@
                 is anything to consent to is deliberate — the alternative is
                 asking a family to agree retroactively — but it is a switch with
                 no machine behind it until Phase 9.
+              </li>
+              <li>
+                <strong>Memories hold no video.</strong> Photographs and voice
+                notes only. A file is capped at 10 MB, which buys about fifteen
+                seconds of video — not a feature, so it waits for Phase 12,
+                where the cap itself is revisited.
+              </li>
+              <li>
+                <strong>Voice notes are not written down.</strong> You can play
+                one back and nothing can read it, search it, or tell you what is
+                in it. Transcription is Phase 9 at the earliest.
+              </li>
+              <li>
+                <strong>You cannot choose an album's cover.</strong> It is the
+                first photograph in the album that you are allowed to see, which
+                also means two people can see different covers on the same
+                album. That is deliberate: a stored cover would give away that a
+                private memory exists.
+              </li>
+              <li>
+                <strong>Albums cannot be reordered.</strong> Memories sit in the
+                order they happened, and there is no way to drag them.
+              </li>
+              <li>
+                <strong>Memories do not appear in the activity feed.</strong>
+                The feed still only knows about people, roles and relationships.
+              </li>
+              <li>
+                <strong>The timeline is still empty.</strong> Memories carry the
+                date they happened, but the section that draws a family's life
+                in order is Phase 7 — and it will span every part of the vault,
+                not just memories.
               </li>
               <li>
                 <strong>You cannot share a document with one person.</strong>
@@ -380,12 +441,20 @@
             <span class="phase-name">3 · Preserve What Matters</span>
             <span class="phase-note">Documents</span>
           </li>
+          <li class="phase shipped">
+            <span class="phase-status">Shipped</span>
+            <span class="phase-name">4 · Family Memories</span>
+            <!-- "Photos, voice" and not "Photos, video, voice": video was
+                 deferred to Phase 12 with the file-size cap it depends on, and
+                 a note claiming it would be the page doing the one thing it
+                 exists not to do. -->
+            <span class="phase-note">Memories, photos, voice, albums</span>
+          </li>
           <li class="phase building">
             <span class="phase-status">Building</span>
-            <span class="phase-name">4 · Family Memories</span>
-            <span class="phase-note">Photos, video, voice</span>
+            <span class="phase-name">5 · Family Health</span>
+            <span class="phase-note">Medical records</span>
           </li>
-          <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">5 · Family Health</span><span class="phase-note">Medical records</span></li>
           <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">6 · Home &amp; Living</span><span class="phase-note">Recipes, inventory</span></li>
           <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">7 · Family Timeline</span><span class="phase-note">Events, reminders</span></li>
           <li class="phase"><span class="phase-status">Planned</span><span class="phase-name">8 · Find Everything</span><span class="phase-note">Search</span></li>
@@ -417,7 +486,7 @@
           </p>
           <p class="status">
             <span class="dot" aria-hidden="true"></span>
-            In active development — Phase 4, Family Memories
+            In active development — Phase 5, Family Health
           </p>
           <div class="actions">
             <a class="btn btn-primary" href="https://www.youtube.com/@vibethroughcode">
